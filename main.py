@@ -6,7 +6,7 @@ from plivo import plivoxml
 import websockets
 from fastapi import FastAPI, WebSocket, Request, Form
 from fastapi.responses import HTMLResponse, JSONResponse
-from fastapi.websockets import WebSocketDisconnect
+from fastapi.websockets import WebSocketDiagrisconnect
 import asyncio
 from settings import settings
 import uvicorn
@@ -35,7 +35,7 @@ LOG_EVENT_TYPES = [
 SHOW_TIMING_MATH = False
 app = FastAPI()
 
-not_registered_user_msg = "Sorry, we couldn't find your registered number. Please register yourself at Agripilot.AI. If you need any assistance, feel free to reach out. Thank you for calling, and have a great day!"
+not_registered_user_msg = "Sorry, we couldn't find your registered number.I. If you need any assistance, feel free to reach out. Thank you for calling, and have a great day!"
 
 if not OPENAI_API_KEY:
     raise ValueError('Missing the OpenAI API key. Please set it in the .env file.')
