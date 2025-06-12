@@ -6,14 +6,19 @@ from plivo import plivoxml
 import websockets
 from fastapi import FastAPI, WebSocket, Request, Form
 from fastapi.responses import HTMLResponse, JSONResponse
-from fastapi.websockets import WebSocketDiagrisconnect
+from fastapi.websockets import WebSocketDisconnect
 import asyncio
 from settings import settings
 import uvicorn
 import warnings
+import openpyxl
+
 warnings.filterwarnings("ignore")
 from dotenv import load_dotenv
+
 load_dotenv()
+records = []
+p_index = 0
 
 plivo_client = plivo.RestClient(settings.PLIVO_AUTH_ID, settings.PLIVO_AUTH_TOKEN)
 
@@ -22,8 +27,7 @@ OPENAI_API_KEY = settings.AZURE_OPENAI_API_KEY_P
 OPENAI_API_ENDPOINT = settings.AZURE_OPENAI_API_ENDPOINT_P
 SYSTEM_MESSAGE = (
     "You are a helpful and Medical assistant  "
- 
-   
+
 )
 VOICE = 'sage'
 LOG_EVENT_TYPES = [
@@ -40,12 +44,42 @@ not_registered_user_msg = "Sorry, we couldn't find your registered number.I. If 
 if not OPENAI_API_KEY:
     raise ValueError('Missing the OpenAI API key. Please set it in the .env file.')
 
+def read_hospital_records(filename="Hospital_Records.xlsx"):
+    global records
+    wb = openpyxl.load_workbook(filename)
+    ws = wb.active
+
+    for row in ws.iter_rows(min_row=2, values_only=True):
+        record = {
+            "name": row[0],
+            "phone_number": row[1],
+            "address": row[2],
+            "age": row[3],
+            "gender": row[4],
+            "appointment_date": row[5],
+            "visit_reason": row[6]
+        }
+        records.append(record)
+
+
 @app.get("/", response_class=JSONResponse)
 async def index_page():
     return {"message": "Twilio Media Stream Server is running!"}
 
+
 @app.api_route("/webhook", methods=["GET", "POST"])
 def home(request: Request):
+    global p_index
+    if request.method == "POST":
+        #make calls here
+        p_index +=1
+        call_made = plivo_client.calls.create(
+            from_=settings.PLIVO_FROM_NUMBER,
+            to_=records[p_index]['phone_number'],
+            answer_url=settings.PLIVO_ANSWER_XML,
+            answer_method='GET')
+        print("Webhook POST request detected!")
+
     xml_data = f'''<?xml version="1.0" encoding="UTF-8"?>
     <Response>
         <Speak>Please wait while we connect your call to the AI Agent. OK you can start speaking.</Speak>
@@ -55,6 +89,7 @@ def home(request: Request):
     </Response>
     '''
     return HTMLResponse(xml_data, media_type='application/xml')
+
 
 @app.api_route("/incoming-call", methods=["GET", "POST"])
 async def handle_incoming_call(request: Request):
@@ -100,6 +135,7 @@ async def handle_incoming_call(request: Request):
 
     return HTMLResponse('<?xml version="1.0" encoding="UTF-8"?>\n' + response.to_string(), media_type="application/xml")
 
+
 @app.post("/voice")
 async def voice_post(Digits: Optional[str] = Form(None)):
     """Handle the user's input"""
@@ -116,14 +152,15 @@ async def voice_post(Digits: Optional[str] = Form(None)):
 
     # Create stream element with WebSocket URL
     stream = response.add(plivoxml.StreamElement(f'{wss_host}/media-stream', extraHeaders=f"lang_code={lang_code}",
-                                               bidirectional=True,
-                                               streamTimeout=86400,  # 24 hours in seconds
-                                               keepCallAlive=True,
-                                               contentType="audio/x-mulaw;rate=8000",
-                                               audioTrack="inbound"
-                                              ))
+                                                 bidirectional=True,
+                                                 streamTimeout=86400,  # 24 hours in seconds
+                                                 keepCallAlive=True,
+                                                 contentType="audio/x-mulaw;rate=8000",
+                                                 audioTrack="inbound"
+                                                 ))
 
     return HTMLResponse('<?xml version="1.0" encoding="UTF-8"?>\n' + stream.to_string(), media_type="application/xml")
+
 
 @app.websocket("/media-stream")
 async def handle_media_stream(websocket: WebSocket):
@@ -259,6 +296,7 @@ async def handle_media_stream(websocket: WebSocket):
 
         await asyncio.gather(receive_from_twilio(), send_to_twilio())
 
+
 async def send_initial_conversation_item(realtime_ai_ws, user_details=None):
     """Send initial conversation item if AI talks first with personalized greeting."""
     greeting_name = user_details.get("FirstName", "there") if user_details else "there"
@@ -278,6 +316,7 @@ async def send_initial_conversation_item(realtime_ai_ws, user_details=None):
     await realtime_ai_ws.send(json.dumps(initial_conversation_item))
     await realtime_ai_ws.send(json.dumps({"type": "response.create"}))
 
+
 async def initialize_session(realtime_ai_ws, user_details=None):
     """Control initial session with OpenAI."""
     session_update = {
@@ -287,7 +326,7 @@ async def initialize_session(realtime_ai_ws, user_details=None):
             "input_audio_format": "g711_ulaw",
             "output_audio_format": "g711_ulaw",
             "voice": VOICE,
-            "instructions": SYSTEM_MESSAGE,
+            "instructions": f"You are a helpful medical assistant/receptionist at INDRA IVF center nagpur which provides all solutions for IVF and related problems. You speak in hindi calm, supportive, composed tone. You are talking to {records[p_index]['name']}, a {records[p_index]['age']} years old {records[p_index]['gender']}. You have called them regarding taking a follow up.",
             "modalities": ["text", "audio"],
             "temperature": 0.8,
         }
@@ -298,14 +337,17 @@ async def initialize_session(realtime_ai_ws, user_details=None):
     # Uncomment the next line to have the AI speak first
     await send_initial_conversation_item(realtime_ai_ws, user_details)
 
+
 @app.on_event("startup")
 async def startup_event():
     pass
 
-if __name__ == "__main__":
+read_hospital_records("Hospital_Records.xlsx")
+def main():
     call_made = plivo_client.calls.create(
         from_=settings.PLIVO_FROM_NUMBER,
-        to_=settings.PLIVO_TO_NUMBER,
+        to_=records[p_index]['phone_number'],
         answer_url=settings.PLIVO_ANSWER_XML,
         answer_method='GET')
     uvicorn.run(app, host="0.0.0.0", port=settings.PORT)
+main()
