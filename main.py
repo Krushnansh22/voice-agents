@@ -12,6 +12,10 @@ from settings import settings
 import uvicorn
 import warnings
 import openpyxl
+from openpyxl import Workbook
+import os
+from datetime import datetime, timedelta
+import re
 
 warnings.filterwarnings("ignore")
 from dotenv import load_dotenv
@@ -19,6 +23,9 @@ from dotenv import load_dotenv
 load_dotenv()
 records = []
 p_index = 0
+
+# Global variable to store conversation transcripts
+conversation_transcript = []
 
 plivo_client = plivo.RestClient(settings.PLIVO_AUTH_ID, settings.PLIVO_AUTH_TOKEN)
 
@@ -44,6 +51,7 @@ not_registered_user_msg = "Sorry, we couldn't find your registered number.I. If 
 if not OPENAI_API_KEY:
     raise ValueError('Missing the OpenAI API key. Please set it in the .env file.')
 
+
 def read_hospital_records(filename="Hospital_Records.xlsx"):
     global records
     wb = openpyxl.load_workbook(filename)
@@ -56,10 +64,139 @@ def read_hospital_records(filename="Hospital_Records.xlsx"):
             "address": row[2],
             "age": row[3],
             "gender": row[4],
-            "appointment_date": row[5],
-            "visit_reason": row[6]
         }
         records.append(record)
+
+
+def extract_appointment_details():
+    """
+    Extract date and time information from the conversation transcript.
+    Returns a dictionary with extracted appointment details.
+    """
+    # Combine all transcripts into one text for analysis
+    full_conversation = " ".join(conversation_transcript)
+
+    extracted_info = {
+        "appointment_date": None,
+        "appointment_time": None,
+        "time_slot": None,
+        "raw_conversation": full_conversation
+    }
+
+    # Date patterns for Hindi/English dates
+    date_patterns = [
+        r'(\d{1,2}[-/]\d{1,2}[-/]\d{4})',  # DD-MM-YYYY or DD/MM/YYYY
+        r'(\d{4}[-/]\d{1,2}[-/]\d{1,2})',  # YYYY-MM-DD or YYYY/MM/DD
+        r'(\d{1,2}\s*\w+\s*\d{4})',  # DD Month YYYY
+    ]
+
+    # Time slot patterns in Hindi
+    time_patterns = [
+        r'(सुबह)',  # Morning
+        r'(दोपहर)',  # Afternoon
+        r'(शाम)',  # Evening
+        r'(रात)',  # Night
+        r'(\d{1,2}:\d{2})',  # HH:MM format
+        r'(\d{1,2}\s*बजे)',  # X o'clock in Hindi
+    ]
+
+    # Extract dates
+    for pattern in date_patterns:
+        matches = re.findall(pattern, full_conversation)
+        if matches:
+            extracted_info["appointment_date"] = matches[0]
+            break
+
+    # Extract time information
+    for pattern in time_patterns:
+        matches = re.findall(pattern, full_conversation, re.IGNORECASE)
+        if matches:
+            extracted_info["appointment_time"] = matches[0]
+            break
+
+    # Determine time slot based on Hindi words
+    if 'सुबह' in full_conversation:
+        extracted_info["time_slot"] = "morning"
+    elif 'दोपहर' in full_conversation:
+        extracted_info["time_slot"] = "afternoon"
+    elif 'शाम' in full_conversation:
+        extracted_info["time_slot"] = "evening"
+    elif 'रात' in full_conversation:
+        extracted_info["time_slot"] = "night"
+
+    # Check if appointment was confirmed
+    confirmation_keywords = ['बुक कर दिया', 'अपॉइंटमेंट', 'बुक', 'शानदार', 'ठीक है']
+    extracted_info["appointment_confirmed"] = any(keyword in full_conversation for keyword in confirmation_keywords)
+
+    return extracted_info
+
+
+def append_appointment_to_excel(appointment_details, patient_record, filename="Appointment_Details.xlsx"):
+    """
+    Append appointment details to Excel file
+
+    Args:
+        appointment_details (dict): Dictionary containing appointment info
+        patient_record (dict): Dictionary containing patient info
+        filename (str): Excel filename to write to
+    """
+    headers = [
+        "Name",
+        "Appointment Date",
+        "Time Slot",
+        "Age",
+        "Gender",
+        "Phone Number",
+        "Address",
+    ]
+
+    # Check if file exists
+    if os.path.exists(filename):
+        # Load existing workbook - THIS PRESERVES ALL EXISTING DATA
+        wb = openpyxl.load_workbook(filename)
+        ws = wb.active
+        print(f"Loaded existing Excel file with {ws.max_row} rows of data")
+    else:
+        # Create new workbook with headers ONLY if file doesn't exist
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Appointment Details"
+
+        # Add headers
+        for col, header in enumerate(headers, 1):
+            ws.cell(row=1, column=col, value=header)
+        print("Created new Excel file with headers")
+
+    # Find the next empty row - THIS ENSURES NO OVERWRITING
+    next_row = ws.max_row + 1
+    print(f"Appending data to row {next_row}")
+
+    # Prepare data row
+    appointment_data = [
+        patient_record.get('name', ''),
+        appointment_details.get('appointment_date', ''),
+        appointment_details.get('appointment_time', '') or appointment_details.get('time_slot', ''),
+        patient_record.get('age', ''),
+        patient_record.get('gender', ''),
+        patient_record.get('phone_number', ''),
+        patient_record.get('address', ''),
+    ]
+
+    # Add data to the next row
+    for col, value in enumerate(appointment_data, 1):
+        ws.cell(row=next_row, column=col, value=value)
+
+    # Add timestamp for when the appointment was recorded
+    ws.cell(row=next_row, column=len(headers) + 1, value=datetime.now().strftime("%Y-%m-%d %H:%M:%S"))
+
+    # Save the workbook
+    try:
+        wb.save(filename)
+        print(f"Appointment details saved to {filename} at row {next_row}")
+        return True
+    except Exception as e:
+        print(f"Error saving appointment details: {e}")
+        return False
 
 
 @app.get("/", response_class=JSONResponse)
@@ -67,12 +204,19 @@ async def index_page():
     return {"message": "Twilio Media Stream Server is running!"}
 
 
+@app.get("/appointment-details")
+async def get_appointment_details():
+    """API endpoint to get extracted appointment details"""
+    details = extract_appointment_details()
+    return JSONResponse(details)
+
+
 @app.api_route("/webhook", methods=["GET", "POST"])
 def home(request: Request):
     global p_index
     if request.method == "POST":
-        #make calls here
-        p_index +=1
+        # make calls here
+        p_index += 1
         call_made = plivo_client.calls.create(
             from_=settings.PLIVO_FROM_NUMBER,
             to_=records[p_index]['phone_number'],
@@ -165,6 +309,8 @@ async def voice_post(Digits: Optional[str] = Form(None)):
 @app.websocket("/media-stream")
 async def handle_media_stream(websocket: WebSocket):
     """Handle WebSocket connections between Twilio and OpenAI."""
+    global conversation_transcript
+
     await websocket.accept()
 
     user_details = None
@@ -219,7 +365,22 @@ async def handle_media_stream(websocket: WebSocket):
                 async for openai_message in realtime_ai_ws:
                     response = json.loads(openai_message)
                     if response['type'] in LOG_EVENT_TYPES:
-                        print(f"Received event: {response['type']}", response)
+                        try:
+                            transcript = response['response']['output'][0]['content'][0]['transcript']
+                            print(f"AI Response: {transcript}")
+                            # Store transcript in global variable
+                            if "बुक कर दिया है" in transcript:
+                                conversation_transcript.append(transcript)
+
+                            # Extract appointment details after each AI response
+                            current_details = extract_appointment_details()
+                            if current_details["appointment_date"] or current_details["appointment_time"]:
+                                # Call the function to append data to Excel before printing
+                                append_appointment_to_excel(current_details, records[p_index])
+                                print(f"*** Appointment Info Detected: {current_details} ***")
+
+                        except (KeyError, IndexError):
+                            print("No transcript found in response")
 
                     if response.get('type') == 'response.audio.delta' and 'delta' in response:
                         audio_payload = base64.b64encode(base64.b64decode(response['delta'])).decode('utf-8')
@@ -326,7 +487,35 @@ async def initialize_session(realtime_ai_ws, user_details=None):
             "input_audio_format": "g711_ulaw",
             "output_audio_format": "g711_ulaw",
             "voice": VOICE,
-            "instructions": f"You are a helpful medical assistant/receptionist at INDRA IVF center nagpur which provides all solutions for IVF and related problems. You speak in hindi calm, supportive, composed tone. You are talking to {records[p_index]['name']}, a {records[p_index]['age']} years old {records[p_index]['gender']}. You have called them regarding taking a follow up.",
+            "instructions": f'''AI ROLE: Female voice receptionist from Aveya IVF, Rajouri Garden
+LANGUAGE: Hindi (देवनागरी लिपि)
+VOICE STYLE: Calm, friendly, trustworthy, emotionally intelligent, feminine
+GENDER CONSISTENCY: Use feminine forms (e.g., "बोल रही हूँ", "कर सकती हूँ", "समझ सकती हूँ")
+GOAL: Invite the user for a free fertility clarity consultation and handle their responses accordingly
+you are talking to {records[p_index]['name']}, a {records[p_index]['age']} years old {records[p_index]['gender']}.
+"नमस्ते {{First_Name}}, मैं Aveya IVF, से Rekha बोल रही हूँ। कैसे हैं आप आज?"
+
+(रुकें, उत्तर सुनें)
+
+"मैं आपसे यह पूछने के लिए कॉल कर रही हूँ कि क्या आप एक फ्री फर्टिलिटी क्लैरिटी कंसल्टेशन के लिए अपॉइंटमेंट लेना चाहेंगे?"
+
+IF USER SAYS YES / INTERESTED:
+
+"बहुत बढ़िया! मैं आपको आने वाले कुछ दिनों की तारीखें बताती हूँ —"
+
+"क्या आप {(datetime.today() + timedelta(days=1)).strftime("%d-%m-%Y")}, {(datetime.today() + timedelta(days=2)).strftime("%d-%m-%Y")}, या {(datetime.today() + timedelta(days=3)).strftime("%d-%m-%Y")} को आना पसंद करेंगे?"
+
+(रुकें, तारीख चुनने दें)
+
+"और उस दिन आपको कौन-सा समय ठीक लगेगा — सुबह, दोपहर या शाम?"
+
+(रुकें, समय चुनने दें)
+
+"शानदार! तो मैंने आपका अपॉइंटमेंट {{चुनी हुई तारीख}} को {{चुना हुआ समय}} के लिए बुक कर दिया है।"
+
+IF USER SAYS NO / NOT NOW:
+
+"कोई बात नहीं — जब भी आप तैयार महसूस करें, हम हमेशा उपलब्ध हैं। धन्यवाद!"''',
             "modalities": ["text", "audio"],
             "temperature": 0.8,
         }
@@ -342,7 +531,10 @@ async def initialize_session(realtime_ai_ws, user_details=None):
 async def startup_event():
     pass
 
+
 read_hospital_records("Hospital_Records.xlsx")
+
+
 def main():
     call_made = plivo_client.calls.create(
         from_=settings.PLIVO_FROM_NUMBER,
@@ -350,4 +542,5 @@ def main():
         answer_url=settings.PLIVO_ANSWER_XML,
         answer_method='GET')
     uvicorn.run(app, host="0.0.0.0", port=settings.PORT)
+
 main()
