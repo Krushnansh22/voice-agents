@@ -4,10 +4,12 @@ from typing import Optional
 import plivo
 from plivo import plivoxml
 import websockets
-from fastapi import FastAPI, WebSocket, Request, Form
+from fastapi import FastAPI, WebSocket, Request, Form, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.websockets import WebSocketDisconnect
 import asyncio
+
+from database.models import call_session_to_dict, transcript_entry_to_dict
 from settings import settings
 import uvicorn
 import warnings
@@ -16,6 +18,10 @@ from openpyxl import Workbook
 import os
 from datetime import datetime, timedelta
 import re
+
+# MongoDB imports
+from database.db_service import db_service
+from database.websocket_manager import websocket_manager
 
 warnings.filterwarnings("ignore")
 from dotenv import load_dotenv
@@ -26,6 +32,9 @@ p_index = 0
 
 # Global variable to store conversation transcripts
 conversation_transcript = []
+
+# Global variable to store current call session
+current_call_session = None
 
 plivo_client = plivo.RestClient(settings.PLIVO_AUTH_ID, settings.PLIVO_AUTH_TOKEN)
 
@@ -46,7 +55,7 @@ LOG_EVENT_TYPES = [
 SHOW_TIMING_MATH = False
 app = FastAPI()
 
-not_registered_user_msg = "Sorry, we couldn't find your registered number.I. If you need any assistance, feel free to reach out. Thank you for calling, and have a great day!"
+not_registered_user_msg = "Sorry, we couldn't find your registered number. If you need any assistance, feel free to reach out. Thank you for calling, and have a great day!"
 
 if not OPENAI_API_KEY:
     raise ValueError('Missing the OpenAI API key. Please set it in the .env file.')
@@ -204,6 +213,68 @@ async def index_page():
     return {"message": "Twilio Media Stream Server is running!"}
 
 
+@app.get("/dashboard", response_class=HTMLResponse)
+async def dashboard():
+    """Serve the transcript dashboard"""
+    with open("transcript_dashboard.html", "r", encoding="utf-8") as file:
+        return HTMLResponse(content=file.read())
+
+
+@app.websocket("/ws/transcripts")
+async def websocket_endpoint(websocket: WebSocket):
+    """WebSocket endpoint for real-time transcript updates"""
+    await websocket_manager.connect(websocket)
+    try:
+        # Send initial connection confirmation
+        await websocket.send_text(json.dumps({
+            "type": "connection_status",
+            "status": "connected",
+            "timestamp": datetime.utcnow().isoformat()
+        }))
+
+        while True:
+            try:
+                # Set a timeout to prevent indefinite blocking
+                message = await asyncio.wait_for(
+                    websocket.receive_text(),
+                    timeout=30.0
+                )
+
+                # Parse and handle incoming messages
+                try:
+                    data = json.loads(message)
+
+                    # Handle ping messages
+                    if data.get("type") == "ping":
+                        await websocket.send_text(json.dumps({
+                            "type": "pong",
+                            "timestamp": datetime.utcnow().isoformat()
+                        }))
+
+                    # Handle other message types as needed
+                    print(f"Received from dashboard: {data}")
+
+                except json.JSONDecodeError:
+                    print(f"Invalid JSON received: {message}")
+
+            except asyncio.TimeoutError:
+                # Send keepalive ping
+                try:
+                    await websocket.send_text(json.dumps({
+                        "type": "keepalive",
+                        "timestamp": datetime.utcnow().isoformat()
+                    }))
+                except:
+                    break  # Connection is broken
+
+    except WebSocketDisconnect:
+        print("Dashboard WebSocket disconnected")
+    except Exception as e:
+        print(f"WebSocket error: {e}")
+    finally:
+        websocket_manager.disconnect(websocket)
+
+
 @app.get("/appointment-details")
 async def get_appointment_details():
     """API endpoint to get extracted appointment details"""
@@ -280,38 +351,44 @@ async def handle_incoming_call(request: Request):
     return HTMLResponse('<?xml version="1.0" encoding="UTF-8"?>\n' + response.to_string(), media_type="application/xml")
 
 
-@app.post("/voice")
-async def voice_post(Digits: Optional[str] = Form(None)):
-    """Handle the user's input"""
-    response = plivoxml.ResponseElement()
-    lang_code = 'en-US'
+@app.get("/api/recent-calls")
+async def get_recent_calls():
+    """Get recent call sessions"""
+    try:
+        recent_calls = await db_service.get_recent_calls(limit=20)
+        return [call_session_to_dict(call) for call in recent_calls]
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
 
-    if Digits == '5':  # User pressed 5, switch to Hindi
-        lang_code = 'hi-IN'
-        response.add(plivoxml.SpeakElement('नमस्ते, मैं आपकी कैसे मदद कर सकती हूँ?', language=lang_code))
-    else:
-        response.add(plivoxml.SpeakElement('Hello, How can I help you today?', language=lang_code))
-
-    wss_host = settings.HOST_URL
-
-    # Create stream element with WebSocket URL
-    stream = response.add(plivoxml.StreamElement(f'{wss_host}/media-stream', extraHeaders=f"lang_code={lang_code}",
-                                                 bidirectional=True,
-                                                 streamTimeout=86400,  # 24 hours in seconds
-                                                 keepCallAlive=True,
-                                                 contentType="audio/x-mulaw;rate=8000",
-                                                 audioTrack="inbound"
-                                                 ))
-
-    return HTMLResponse('<?xml version="1.0" encoding="UTF-8"?>\n' + stream.to_string(), media_type="application/xml")
-
+@app.get("/api/call-transcripts/{call_id}")
+async def get_call_transcripts(call_id: str):
+    """Get transcripts for a specific call"""
+    try:
+        transcripts = await db_service.get_call_transcripts(call_id)
+        return [transcript_entry_to_dict(transcript) for transcript in transcripts]
+    except Exception as e:
+        return JSONResponse({"error": str(e)}, status_code=500)
 
 @app.websocket("/media-stream")
 async def handle_media_stream(websocket: WebSocket):
     """Handle WebSocket connections between Twilio and OpenAI."""
-    global conversation_transcript
+    global conversation_transcript, current_call_session
 
     await websocket.accept()
+
+    # Create new call session in MongoDB
+    patient_record = records[p_index] if p_index < len(records) else {"name": "Unknown", "phone_number": "Unknown"}
+    current_call_session = await db_service.create_call_session(
+        patient_name=patient_record.get("name", "Unknown"),
+        patient_phone=patient_record.get("phone_number", "Unknown")
+    )
+
+    # Broadcast call started status
+    await websocket_manager.broadcast_call_status(
+        call_id=current_call_session.call_id,
+        status="started",
+        patient_name=current_call_session.patient_name
+    )
 
     user_details = None
 
@@ -358,6 +435,14 @@ async def handle_media_stream(websocket: WebSocket):
                 if realtime_ai_ws.open:
                     await realtime_ai_ws.close()
 
+                # End call session in MongoDB
+                if current_call_session:
+                    await db_service.end_call_session(current_call_session.call_id)
+                    await websocket_manager.broadcast_call_status(
+                        call_id=current_call_session.call_id,
+                        status="ended"
+                    )
+
         async def send_to_twilio():
             """Receive events from the OpenAI Realtime API, send audio back to Twilio."""
             nonlocal stream_sid, last_assistant_item, response_start_timestamp_twilio
@@ -368,6 +453,23 @@ async def handle_media_stream(websocket: WebSocket):
                         try:
                             transcript = response['response']['output'][0]['content'][0]['transcript']
                             print(f"AI Response: {transcript}")
+
+                            # Store AI response in MongoDB and broadcast
+                            if current_call_session:
+                                await db_service.save_transcript(
+                                    call_id=current_call_session.call_id,
+                                    speaker="ai",
+                                    message=transcript
+                                )
+
+                                # Broadcast to WebSocket clients
+                                await websocket_manager.broadcast_transcript(
+                                    call_id=current_call_session.call_id,
+                                    speaker="ai",
+                                    message=transcript,
+                                    timestamp=datetime.utcnow().isoformat()
+                                )
+
                             # Store transcript in global variable
                             if "बुक कर दिया है" in transcript:
                                 conversation_transcript.append(transcript)
@@ -405,12 +507,37 @@ async def handle_media_stream(websocket: WebSocket):
 
                         await send_mark(websocket, stream_sid)
 
-                    # Trigger an interruption. Your use case might work better using `input_audio_buffer.speech_stopped`, or combining the two.
+                    # Handle user speech (transcript from speech_started events would need additional processing)
                     if response.get('type') == 'input_audio_buffer.speech_started':
                         print("Speech started detected.")
                         if last_assistant_item:
                             print(f"Interrupting response with id: {last_assistant_item}")
                             await handle_speech_started_event()
+
+                    # Handle user transcript (if available in response)
+                    if response.get('type') == 'conversation.item.input_audio_transcription.completed':
+                        try:
+                            user_transcript = response.get('transcript', '')
+                            if user_transcript and current_call_session:
+                                print(f"User Transcript: {user_transcript}")
+
+                                # Store user transcript in MongoDB and broadcast
+                                await db_service.save_transcript(
+                                    call_id=current_call_session.call_id,
+                                    speaker="user",
+                                    message=user_transcript
+                                )
+
+                                # Broadcast to WebSocket clients
+                                await websocket_manager.broadcast_transcript(
+                                    call_id=current_call_session.call_id,
+                                    speaker="user",
+                                    message=user_transcript,
+                                    timestamp=datetime.utcnow().isoformat()
+                                )
+                        except Exception as e:
+                            print(f"Error processing user transcript: {e}")
+
             except Exception as e:
                 print(f"Error in send_to_twilio: {e}")
 
@@ -529,7 +656,17 @@ IF USER SAYS NO / NOT NOW:
 
 @app.on_event("startup")
 async def startup_event():
-    pass
+    """Initialize database connection on startup"""
+    connected = await db_service.connect()
+    if not connected:
+        raise RuntimeError("Failed to connect to MongoDB")
+    print("✅ Application started with MongoDB connection")
+
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    """Close database connection on shutdown"""
+    await db_service.disconnect()
 
 
 read_hospital_records("Hospital_Records.xlsx")
@@ -543,4 +680,5 @@ def main():
         answer_method='GET')
     uvicorn.run(app, host="0.0.0.0", port=settings.PORT)
 
-main()
+if __name__ =="__main__":
+    main()
