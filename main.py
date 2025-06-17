@@ -50,7 +50,7 @@ LOG_EVENT_TYPES = [
     'error', 'response.content.done', 'rate_limits.updated',
     'response.done', 'input_audio_buffer.committed',
     'input_audio_buffer.speech_stopped', 'input_audio_buffer.speech_started',
-    'session.created'
+    'session.created', 'conversation.item.input_audio_transcription.completed'
 ]
 SHOW_TIMING_MATH = False
 app = FastAPI()
@@ -449,7 +449,36 @@ async def handle_media_stream(websocket: WebSocket):
             try:
                 async for openai_message in realtime_ai_ws:
                     response = json.loads(openai_message)
-                    if response['type'] in LOG_EVENT_TYPES:
+                    
+                    # Handle user transcription - UNIFIED HANDLING
+                    if response.get('type') == 'conversation.item.input_audio_transcription.completed':
+                        try:
+                            print(f"RAW TRANSCRIPTION RESPONSE: {response}")
+                            user_transcript = response.get('transcript', '').strip()
+                            
+                            if user_transcript:
+                                print(f"User said: {user_transcript}")
+                                
+                                # Store user transcript in MongoDB and broadcast
+                                if current_call_session:
+                                    await db_service.save_transcript(
+                                        call_id=current_call_session.call_id,
+                                        speaker="user",
+                                        message=user_transcript
+                                    )
+
+                                    # Broadcast to WebSocket clients
+                                    await websocket_manager.broadcast_transcript(
+                                        call_id=current_call_session.call_id,
+                                        speaker="user",
+                                        message=user_transcript,
+                                        timestamp=datetime.utcnow().isoformat()
+                                    )
+                        except Exception as e:
+                            print(f"Error processing user transcript: {e}")
+                    
+                    # Handle AI response transcription
+                    elif response['type'] in LOG_EVENT_TYPES:
                         try:
                             transcript = response['response']['output'][0]['content'][0]['transcript']
                             print(f"AI Response: {transcript}")
@@ -484,7 +513,8 @@ async def handle_media_stream(websocket: WebSocket):
                         except (KeyError, IndexError):
                             print("No transcript found in response")
 
-                    if response.get('type') == 'response.audio.delta' and 'delta' in response:
+                    # Handle audio delta
+                    elif response.get('type') == 'response.audio.delta' and 'delta' in response:
                         audio_payload = base64.b64encode(base64.b64decode(response['delta'])).decode('utf-8')
                         audio_delta = {
                             "event": "playAudio",
@@ -495,51 +525,31 @@ async def handle_media_stream(websocket: WebSocket):
                             }
                         }
                         await websocket.send_json(audio_delta)
-
+        
                         if response_start_timestamp_twilio is None:
                             response_start_timestamp_twilio = latest_media_timestamp
                             if SHOW_TIMING_MATH:
                                 print(f"Setting start timestamp for new response: {response_start_timestamp_twilio}ms")
-
+        
                         # Update last_assistant_item safely
                         if response.get('item_id'):
                             last_assistant_item = response['item_id']
-
+        
                         await send_mark(websocket, stream_sid)
 
-                    # Handle user speech (transcript from speech_started events would need additional processing)
-                    if response.get('type') == 'input_audio_buffer.speech_started':
+                    # Handle speech started
+                    elif response.get('type') == 'input_audio_buffer.speech_started':
                         print("Speech started detected.")
+                        print(response)
+        
                         if last_assistant_item:
                             print(f"Interrupting response with id: {last_assistant_item}")
                             await handle_speech_started_event()
 
-                    # Handle user transcript (if available in response)
-                    if response.get('type') == 'conversation.item.input_audio_transcription.completed':
-                        try:
-                            user_transcript = response.get('transcript', '')
-                            if user_transcript and current_call_session:
-                                print(f"User Transcript: {user_transcript}")
-
-                                # Store user transcript in MongoDB and broadcast
-                                await db_service.save_transcript(
-                                    call_id=current_call_session.call_id,
-                                    speaker="user",
-                                    message=user_transcript
-                                )
-
-                                # Broadcast to WebSocket clients
-                                await websocket_manager.broadcast_transcript(
-                                    call_id=current_call_session.call_id,
-                                    speaker="user",
-                                    message=user_transcript,
-                                    timestamp=datetime.utcnow().isoformat()
-                                )
-                        except Exception as e:
-                            print(f"Error processing user transcript: {e}")
-
             except Exception as e:
                 print(f"Error in send_to_twilio: {e}")
+
+
 
         async def handle_speech_started_event():
             """Handle interruption when the caller's speech starts."""
@@ -610,6 +620,11 @@ async def initialize_session(realtime_ai_ws, user_details=None):
     session_update = {
         "type": "session.update",
         "session": {
+            "input_audio_transcription": {
+            "model": "whisper-1",
+            "language": "hi",
+            
+        },
             "turn_detection": {"type": "server_vad"},
             "input_audio_format": "g711_ulaw",
             "output_audio_format": "g711_ulaw",
