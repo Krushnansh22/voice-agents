@@ -1,0 +1,840 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Aveya IVF - AI Assistant Dashboard</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: #333;
+        }
+
+        .dashboard-container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .header {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 20px 30px;
+            margin-bottom: 25px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .header h1 {
+            color: #2c3e50;
+            font-size: 2.2em;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
+        .header p {
+            color: #7f8c8d;
+            font-size: 1.1em;
+        }
+
+        .status-bar {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: rgba(255, 255, 255, 0.9);
+            padding: 15px 25px;
+            border-radius: 12px;
+            margin-bottom: 25px;
+            box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1);
+        }
+
+        .connection-status {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-weight: 500;
+        }
+
+        .status-dot {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #e74c3c;
+            animation: pulse 2s infinite;
+        }
+
+        .status-dot.connected {
+            background: #27ae60;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+
+        .stats {
+            display: flex;
+            gap: 30px;
+            font-size: 0.95em;
+            color: #555;
+        }
+
+        .main-content {
+            display: grid;
+            grid-template-columns: 300px 1fr;
+            gap: 25px;
+            height: calc(100vh - 200px);
+        }
+
+        .sidebar {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 25px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .sidebar h3 {
+            color: #2c3e50;
+            margin-bottom: 20px;
+            font-size: 1.3em;
+            font-weight: 600;
+        }
+
+        .recent-calls {
+            max-height: calc(100vh - 350px);
+            overflow-y: auto;
+        }
+
+        .call-item {
+            background: #f8f9fa;
+            border-radius: 10px;
+            padding: 15px;
+            margin-bottom: 12px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            border-left: 4px solid #3498db;
+        }
+
+        .call-item:hover {
+            background: #e9ecef;
+            transform: translateX(5px);
+        }
+
+        .call-item.active {
+            background: #e3f2fd;
+            border-left-color: #2196f3;
+            box-shadow: 0 2px 10px rgba(33, 150, 243, 0.2);
+        }
+
+        .call-item.ended {
+            border-left-color: #95a5a6;
+            opacity: 0.8;
+        }
+
+        .call-info h4 {
+            color: #2c3e50;
+            font-size: 1em;
+            margin-bottom: 5px;
+        }
+
+        .call-info p {
+            color: #7f8c8d;
+            font-size: 0.85em;
+            margin-bottom: 3px;
+        }
+
+        .call-status {
+            display: inline-block;
+            padding: 3px 8px;
+            border-radius: 12px;
+            font-size: 0.75em;
+            font-weight: 500;
+            margin-top: 5px;
+        }
+
+        .call-status.active {
+            background: #d4edda;
+            color: #155724;
+        }
+
+        .call-status.ended {
+            background: #f8d7da;
+            color: #721c24;
+        }
+
+        .transcript-panel {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .transcript-header {
+            padding: 25px 30px 20px;
+            border-bottom: 1px solid #eee;
+        }
+
+        .transcript-header h3 {
+            color: #2c3e50;
+            font-size: 1.4em;
+            margin-bottom: 8px;
+            font-weight: 600;
+        }
+
+        .current-call-info {
+            color: #7f8c8d;
+            font-size: 0.95em;
+        }
+
+        .transcript-messages {
+            flex: 1;
+            overflow-y: auto;
+            padding: 20px 30px;
+            max-height: calc(100vh - 400px);
+        }
+
+        .message {
+            margin-bottom: 20px;
+            display: flex;
+            flex-direction: column;
+            animation: slideIn 0.3s ease-out;
+        }
+
+        @keyframes slideIn {
+            from {
+                opacity: 0;
+                transform: translateY(10px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .message.user {
+            align-items: flex-end;
+        }
+
+        .message.ai {
+            align-items: flex-start;
+        }
+
+        .message-bubble {
+            max-width: 80%;
+            padding: 15px 20px;
+            border-radius: 18px;
+            position: relative;
+            word-wrap: break-word;
+            line-height: 1.4;
+        }
+
+        .message.user .message-bubble {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border-bottom-right-radius: 5px;
+        }
+
+        .message.ai .message-bubble {
+            background: #f1f3f4;
+            color: #2c3e50;
+            border-bottom-left-radius: 5px;
+            border: 1px solid #e1e5e9;
+        }
+
+        .message-time {
+            font-size: 0.75em;
+            color: #95a5a6;
+            margin-top: 5px;
+            font-weight: 500;
+        }
+
+        .message.user .message-time {
+            text-align: right;
+        }
+
+        .message.ai .message-time {
+            text-align: left;
+        }
+
+        .speaker-label {
+            font-size: 0.8em;
+            font-weight: 600;
+            margin-bottom: 5px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .message.user .speaker-label {
+            color: #667eea;
+            text-align: right;
+        }
+
+        .message.ai .speaker-label {
+            color: #e74c3c;
+        }
+
+        .no-transcript {
+            text-align: center;
+            color: #95a5a6;
+            font-style: italic;
+            margin-top: 50px;
+            font-size: 1.1em;
+        }
+
+        .loading {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            padding: 30px;
+        }
+
+        .loading-spinner {
+            width: 40px;
+            height: 40px;
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .error-message {
+            background: #f8d7da;
+            color: #721c24;
+            padding: 15px;
+            border-radius: 10px;
+            margin: 20px;
+            text-align: center;
+            border: 1px solid #f1b2b2;
+        }
+
+        /* Scrollbar Styling */
+        ::-webkit-scrollbar {
+            width: 8px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: #f1f1f1;
+            border-radius: 10px;
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: #c1c1c1;
+            border-radius: 10px;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: #a8a8a8;
+        }
+
+        /* Responsive Design */
+        @media (max-width: 1024px) {
+            .main-content {
+                grid-template-columns: 1fr;
+                gap: 20px;
+            }
+
+            .sidebar {
+                order: 2;
+                max-height: 300px;
+            }
+
+            .transcript-panel {
+                order: 1;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .dashboard-container {
+                padding: 15px;
+            }
+
+            .header h1 {
+                font-size: 1.8em;
+            }
+
+            .status-bar {
+                flex-direction: column;
+                gap: 15px;
+                text-align: center;
+            }
+
+            .stats {
+                justify-content: center;
+            }
+
+            .transcript-messages {
+                padding: 15px 20px;
+            }
+
+            .message-bubble {
+                max-width: 90%;
+                padding: 12px 16px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="dashboard-container">
+        <div class="header">
+            <h1>🏥 Aveya IVF - AI Assistant Dashboard</h1>
+            <p>Real-time monitoring of AI voice assistant conversations</p>
+        </div>
+
+        <div class="status-bar">
+            <div class="connection-status">
+                <div class="status-dot" id="connectionDot"></div>
+                <span id="connectionStatus">Connecting to server...</span>
+            </div>
+            <div class="stats">
+                <span>Connected: <strong id="connectionTime">--:--</strong></span>
+            </div>
+        </div>
+
+        <div class="main-content">
+            <div class="sidebar">
+                <h3>📞 Recent Calls</h3>
+                <div class="recent-calls" id="recentCalls">
+                    <div class="loading">
+                        <div class="loading-spinner"></div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="transcript-panel">
+                <div class="transcript-header">
+                    <h3>💬 Live Transcript</h3>
+                    <div class="current-call-info" id="currentCallInfo">
+                        Select a call to view transcript
+                    </div>
+                </div>
+                <div class="transcript-messages" id="transcriptMessages">
+                    <div class="no-transcript">
+                        🤖 No active conversation. Transcripts will appear here in real-time.
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        class TranscriptDashboard {
+            constructor() {
+                this.ws = null;
+                this.reconnectAttempts = 0;
+                this.maxReconnectAttempts = 5;
+                this.reconnectDelay = 3000;
+                this.connectionStartTime = null;
+                this.currentCallId = null;
+                this.calls = new Map();
+                this.transcripts = new Map();
+                this.totalMessages = 0;
+
+                this.init();
+            }
+
+            init() {
+                this.connectWebSocket();
+                this.loadRecentCalls();
+                this.startConnectionTimer();
+            }
+
+            connectWebSocket() {
+                const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                const wsUrl = `${protocol}//${window.location.host}/ws/transcripts`;
+
+                try {
+                    this.ws = new WebSocket(wsUrl);
+
+                    this.ws.onopen = () => {
+                        console.log('WebSocket connected');
+                        this.updateConnectionStatus(true);
+                        this.reconnectAttempts = 0;
+                        this.connectionStartTime = new Date();
+                    };
+
+                    this.ws.onmessage = (event) => {
+                        try {
+                            const data = JSON.parse(event.data);
+                            this.handleWebSocketMessage(data);
+                        } catch (error) {
+                            console.error('Error parsing WebSocket message:', error);
+                        }
+                    };
+
+                    this.ws.onclose = () => {
+                        console.log('WebSocket disconnected');
+                        this.updateConnectionStatus(false);
+                        this.scheduleReconnect();
+                    };
+
+                    this.ws.onerror = (error) => {
+                        console.error('WebSocket error:', error);
+                        this.updateConnectionStatus(false);
+                    };
+
+                } catch (error) {
+                    console.error('Failed to connect WebSocket:', error);
+                    this.updateConnectionStatus(false);
+                    this.scheduleReconnect();
+                }
+            }
+
+            handleWebSocketMessage(data) {
+                switch (data.type) {
+                    case 'transcript':
+                        this.handleTranscriptMessage(data);
+                        break;
+                    case 'call_status':
+                        this.handleCallStatusMessage(data);
+                        break;
+                    case 'connection_status':
+                    case 'pong':
+                    case 'keepalive':
+                        // Handle connection messages
+                        break;
+                    default:
+                        console.log('Unknown message type:', data.type);
+                }
+            }
+
+            handleTranscriptMessage(data) {
+                const { call_id, speaker, message, timestamp } = data;
+
+                // Store transcript
+                if (!this.transcripts.has(call_id)) {
+                    this.transcripts.set(call_id, []);
+                }
+
+                const transcriptEntry = {
+                    speaker,
+                    message,
+                    timestamp: new Date(timestamp)
+                };
+
+                this.transcripts.get(call_id).push(transcriptEntry);
+                this.totalMessages++;
+
+                // Update UI if this is the current call
+                if (this.currentCallId === call_id) {
+                    this.addTranscriptMessage(transcriptEntry);
+                }
+
+                this.updateStats();
+            }
+
+            handleCallStatusMessage(data) {
+                const { call_id, status, patient_name, timestamp } = data;
+
+                if (status === 'started') {
+                    const call = {
+                        call_id,
+                        patient_name: patient_name || 'Unknown Patient',
+                        status: 'active',
+                        started_at: new Date(timestamp)
+                    };
+
+                    this.calls.set(call_id, call);
+                    this.addCallToSidebar(call);
+
+                    // Auto-select the new call
+                    this.selectCall(call_id);
+
+                } else if (status === 'ended') {
+                    const call = this.calls.get(call_id);
+                    if (call) {
+                        call.status = 'ended';
+                        call.ended_at = new Date(timestamp);
+                        this.updateCallInSidebar(call);
+                    }
+                }
+
+                this.updateStats();
+            }
+
+            async loadRecentCalls() {
+                try {
+                    const response = await fetch('/api/recent-calls');
+                    if (response.ok) {
+                        const calls = await response.json();
+                        this.displayRecentCalls(calls);
+                    }
+                } catch (error) {
+                    console.error('Failed to load recent calls:', error);
+                    this.displayError('Failed to load recent calls');
+                }
+            }
+
+            displayRecentCalls(calls) {
+                const container = document.getElementById('recentCalls');
+                container.innerHTML = '';
+
+                if (calls.length === 0) {
+                    container.innerHTML = '<div style="text-align: center; color: #999; padding: 20px;">No recent calls</div>';
+                    return;
+                }
+
+                calls.forEach(call => {
+                    this.calls.set(call.call_id, call);
+                    this.addCallToSidebar(call);
+                });
+            }
+
+            addCallToSidebar(call) {
+                const container = document.getElementById('recentCalls');
+
+                // Remove loading spinner if present
+                const loading = container.querySelector('.loading');
+                if (loading) {
+                    loading.remove();
+                }
+
+                const callElement = this.createCallElement(call);
+                container.insertBefore(callElement, container.firstChild);
+            }
+
+            createCallElement(call) {
+                const div = document.createElement('div');
+                div.className = `call-item ${call.status}`;
+                div.dataset.callId = call.call_id;
+                div.onclick = () => this.selectCall(call.call_id);
+
+                const startTime = new Date(call.started_at).toLocaleTimeString();
+                const duration = call.ended_at ?
+                    this.calculateDuration(call.started_at, call.ended_at) :
+                    'Ongoing';
+
+                div.innerHTML = `
+                    <div class="call-info">
+                        <h4>${call.patient_name}</h4>
+                        <p>📞 ${call.patient_phone || 'Unknown'}</p>
+                        <p>🕐 ${startTime}</p>
+                        <p>⏱️ ${duration}</p>
+                        <span class="call-status ${call.status}">${call.status}</span>
+                    </div>
+                `;
+
+                return div;
+            }
+
+            updateCallInSidebar(call) {
+                const element = document.querySelector(`[data-call-id="${call.call_id}"]`);
+                if (element) {
+                    element.className = `call-item ${call.status}`;
+                    const statusElement = element.querySelector('.call-status');
+                    if (statusElement) {
+                        statusElement.textContent = call.status;
+                        statusElement.className = `call-status ${call.status}`;
+                    }
+
+                    // Update duration
+                    const duration = call.ended_at ?
+                        this.calculateDuration(call.started_at, call.ended_at) :
+                        'Ongoing';
+
+                    const durationElement = element.querySelector('.call-info p:last-of-type');
+                    if (durationElement) {
+                        durationElement.textContent = `⏱️ ${duration}`;
+                    }
+                }
+            }
+
+            async selectCall(callId) {
+                this.currentCallId = callId;
+
+                // Update UI selection
+                document.querySelectorAll('.call-item').forEach(item => {
+                    item.classList.remove('active');
+                });
+
+                const selectedItem = document.querySelector(`[data-call-id="${callId}"]`);
+                if (selectedItem) {
+                    selectedItem.classList.add('active');
+                }
+
+                // Update current call info
+                const call = this.calls.get(callId);
+                if (call) {
+                    document.getElementById('currentCallInfo').textContent =
+                        `${call.patient_name} - ${call.status} - ${new Date(call.started_at).toLocaleString()}`;
+                }
+
+                // Load and display transcripts
+                await this.loadCallTranscripts(callId);
+            }
+
+            async loadCallTranscripts(callId) {
+                const container = document.getElementById('transcriptMessages');
+                container.innerHTML = '<div class="loading"><div class="loading-spinner"></div></div>';
+
+                try {
+                    // Check if we have transcripts in memory first
+                    if (this.transcripts.has(callId)) {
+                        this.displayTranscripts(this.transcripts.get(callId));
+                        return;
+                    }
+
+                    // Otherwise fetch from server
+                    const response = await fetch(`/api/call-transcripts/${callId}`);
+                    if (response.ok) {
+                        const transcripts = await response.json();
+                        this.transcripts.set(callId, transcripts.map(t => ({
+                            ...t,
+                            timestamp: new Date(t.timestamp)
+                        })));
+                        this.displayTranscripts(this.transcripts.get(callId));
+                    } else {
+                        throw new Error('Failed to fetch transcripts');
+                    }
+                } catch (error) {
+                    console.error('Failed to load transcripts:', error);
+                    container.innerHTML = '<div class="error-message">Failed to load transcripts</div>';
+                }
+            }
+
+            displayTranscripts(transcripts) {
+                const container = document.getElementById('transcriptMessages');
+                container.innerHTML = '';
+
+                if (transcripts.length === 0) {
+                    container.innerHTML = '<div class="no-transcript">No messages yet. Conversation will appear here in real-time.</div>';
+                    return;
+                }
+
+                transcripts.forEach(transcript => {
+                    this.addTranscriptMessage(transcript, false);
+                });
+
+                // Scroll to bottom
+                container.scrollTop = container.scrollHeight;
+            }
+
+            addTranscriptMessage(transcript, shouldScroll = true) {
+                const container = document.getElementById('transcriptMessages');
+
+                // Remove "no transcript" message if present
+                const noTranscript = container.querySelector('.no-transcript');
+                if (noTranscript) {
+                    noTranscript.remove();
+                }
+
+                const messageDiv = document.createElement('div');
+                messageDiv.className = `message ${transcript.speaker}`;
+
+                const timeString = transcript.timestamp.toLocaleTimeString();
+                const speakerLabel = transcript.speaker === 'user' ? 'Patient' : 'AI Assistant';
+
+                messageDiv.innerHTML = `
+                    <div class="speaker-label">${speakerLabel}</div>
+                    <div class="message-bubble">${this.escapeHtml(transcript.message)}</div>
+                    <div class="message-time">${timeString}</div>
+                `;
+
+                container.appendChild(messageDiv);
+
+                if (shouldScroll) {
+                    container.scrollTop = container.scrollHeight;
+                }
+            }
+
+            updateConnectionStatus(connected) {
+                const dot = document.getElementById('connectionDot');
+                const status = document.getElementById('connectionStatus');
+
+                if (connected) {
+                    dot.classList.add('connected');
+                    status.textContent = 'Connected to server';
+                } else {
+                    dot.classList.remove('connected');
+                    status.textContent = 'Disconnected from server';
+                }
+            }
+
+            updateStats() {
+                const activeCalls = Array.from(this.calls.values()).filter(call => call.status === 'active').length;
+                document.getElementById('activeCalls').textContent = activeCalls;
+                document.getElementById('totalMessages').textContent = this.totalMessages;
+            }
+
+            startConnectionTimer() {
+                setInterval(() => {
+                    if (this.connectionStartTime) {
+                        const now = new Date();
+                        const diff = now - this.connectionStartTime;
+                        const minutes = Math.floor(diff / 60000);
+                        const seconds = Math.floor((diff % 60000) / 1000);
+                        document.getElementById('connectionTime').textContent =
+                            `${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+                    }
+                }, 1000);
+            }
+
+            scheduleReconnect() {
+                if (this.reconnectAttempts < this.maxReconnectAttempts) {
+                    this.reconnectAttempts++;
+                    console.log(`Attempting to reconnect (${this.reconnectAttempts}/${this.maxReconnectAttempts})...`);
+
+                    setTimeout(() => {
+                        this.connectWebSocket();
+                    }, this.reconnectDelay);
+                } else {
+                    console.error('Max reconnection attempts reached');
+                    document.getElementById('connectionStatus').textContent = 'Connection failed - Please refresh page';
+                }
+            }
+
+            calculateDuration(start, end) {
+                const diff = new Date(end) - new Date(start);
+                const minutes = Math.floor(diff / 60000);
+                const seconds = Math.floor((diff % 60000) / 1000);
+                return `${minutes}:${seconds.toString().padStart(2, '0')}`;
+            }
+
+            displayError(message) {
+                const container = document.getElementById('recentCalls');
+                container.innerHTML = `<div class="error-message">${message}</div>`;
+            }
+
+            escapeHtml(text) {
+                const div = document.createElement('div');
+                div.textContent = text;
+                return div.innerHTML;
+            }
+        }
+
+        // Initialize dashboard when page loads
+        document.addEventListener('DOMContentLoaded', () => {
+            new TranscriptDashboard();
+        });
+
+        // Handle page visibility changes to maintain connection
+        document.addEventListener('visibilitychange', () => {
+            if (!document.hidden && window.dashboard) {
+                // Page became visible, check connection
+                if (window.dashboard.ws.readyState !== WebSocket.OPEN) {
+                    window.dashboard.connectWebSocket();
+                }
+            }
+        });
+    </script>
+</body>
+</html>
