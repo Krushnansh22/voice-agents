@@ -1,8 +1,10 @@
 from pydantic_settings import BaseSettings
 from pydantic import Extra
 from dotenv import load_dotenv
+
 load_dotenv()
- 
+
+
 class Settings(BaseSettings):
     PLIVO_AUTH_ID: str
     PLIVO_AUTH_TOKEN: str
@@ -14,8 +16,13 @@ class Settings(BaseSettings):
     HOST_URL: str
     PORT: int = 8090
 
+    # MongoDB Settings
+    MONGODB_URL: str = "mongodb://localhost:27017"
+    MONGODB_DATABASE: str = "voice_assistant_db"
+
     class Config:
         env_file = ".env"
         extra = Extra.allow
+
 
 settings = Settings()
