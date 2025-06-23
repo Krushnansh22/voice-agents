@@ -8,7 +8,6 @@ from fastapi import FastAPI, WebSocket, Request, Form, WebSocketDisconnect
 from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.websockets import WebSocketDisconnect
 import asyncio
-import aiohttp
 
 from database.models import call_session_to_dict, transcript_entry_to_dict
 from settings import settings
@@ -19,23 +18,38 @@ from openpyxl import Workbook
 import os
 from datetime import datetime, timedelta
 import re
+import threading
 import time
+import httpx
 import logging
 
 # MongoDB imports
 from database.db_service import db_service
 from database.websocket_manager import websocket_manager
 
+warnings.filterwarnings("ignore")
+from dotenv import load_dotenv
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-warnings.filterwarnings("ignore")
-from dotenv import load_dotenv
-
 load_dotenv()
 records = []
-p_index = 0
+last_processed_count = 0
+called_numbers = []  # Track all called numbers for summary
+p_index = 0  # Current call index - advances after each call
+call_in_progress = False  # Prevent multiple simultaneous calls
+MAX_CALL_DURATION = 300  # 5 minutes in seconds
+call_timer_task = None
+call_uuid_storage = {}  # Store UUIDs by p_index
+current_call_uuid = None  # Current active call UUID
+
+# Global variables for call tracking
+call_start_time = None
+call_outcome_detected = False
+
+app = FastAPI()
 
 # Global variable to store conversation transcripts
 conversation_transcript = []
@@ -43,20 +57,13 @@ conversation_transcript = []
 # Global variable to store current call session
 current_call_session = None
 
-# Global variables to track call status
-call_start_time = None
-call_outcome_detected = False
-
-# Store current Plivo call UUID for hangup
-current_plivo_call_uuid = None
-
 plivo_client = plivo.RestClient(settings.PLIVO_AUTH_ID, settings.PLIVO_AUTH_TOKEN)
 
 # Configuration
 OPENAI_API_KEY = settings.AZURE_OPENAI_API_KEY_P
 OPENAI_API_ENDPOINT = settings.AZURE_OPENAI_API_ENDPOINT_P
 SYSTEM_MESSAGE = (
-    "You are a helpful and Medical assistant  "
+    "You are a helpful and Medical assistant"
 )
 VOICE = 'sage'
 LOG_EVENT_TYPES = [
@@ -66,7 +73,6 @@ LOG_EVENT_TYPES = [
     'session.created', 'conversation.item.input_audio_transcription.completed'
 ]
 SHOW_TIMING_MATH = False
-app = FastAPI()
 
 not_registered_user_msg = "Sorry, we couldn't find your registered number. If you need any assistance, feel free to reach out. Thank you for calling, and have a great day!"
 
@@ -77,12 +83,15 @@ if not OPENAI_API_KEY:
 class CallHangupManager:
     """Manages automatic call hangup after successful outcomes"""
 
-    def __init__(self, delay_seconds: int = 3):
+    def __init__(self, delay_seconds: int = 7):
         self.delay_seconds = delay_seconds
         self.pending_hangups = set()
 
     async def schedule_hangup(self, call_uuid: str, reason: str):
         """Schedule a call hangup after delay"""
+        global current_call_uuid
+
+        call_uuid = current_call_uuid
         if call_uuid in self.pending_hangups:
             return
 
@@ -115,545 +124,330 @@ class CallHangupManager:
             return False
 
 
-class EnhancedOutcomeDetector:
-    """Enhanced outcome detection with hangup triggering"""
-
-    # Patterns that indicate successful appointment booking with finality
-    APPOINTMENT_SUCCESS_PATTERNS = [
-        r'बुक कर दिया है',
-        r'अपॉइंटमेंट.*बुक.*है',
-        r'आपका अपॉइंटमेंट.*फिक्स',
-        r'तो मैंने.*बुक कर दिया',
-        r'शानदार.*बुक कर दिया',
-        r'धन्यवाद.*अपॉइंटमेंट.*बुक',
-    ]
-
-    # Patterns that indicate successful reschedule with finality AND callback time captured
-    RESCHEDULE_SUCCESS_PATTERNS = [
-        r'मैं आपको.*कॉल करूंगी.*धन्यवाद',
-        r'बाद में मिलते हैं',
-        r'अच्छा दिन हो.*मिलते हैं',
-        r'धन्यवाद.*बाद में.*मिलते',
-        r'ठीक है.*कॉल करूंगी.*धन्यवाद',
-        r'मैं.*समय.*कॉल करूंगी.*धन्यवाद',
-        r'आपको.*कॉल कर दूंगी.*धन्यवाद',
-    ]
-
-    # Patterns that indicate user is not interested and AI is ending politely
-    NOT_INTERESTED_PATTERNS = [
-        r'कोई बात नहीं.*उपलब्ध हैं.*धन्यवाद',
-        r'जब भी.*तैयार महसूस.*धन्यवाद',
-        r'धन्यवाद.*अच्छा दिन हो',
-        r'समझ सकती.*interested नहीं.*धन्यवाद',
-        r'ठीक है.*धन्यवाद.*अच्छा दिन',
-        r'कोई समस्या नहीं.*धन्यवाद',
-        r'समझ गई.*धन्यवाद.*अच्छा दिन',
-    ]
-
-    # User patterns that indicate clear disinterest (from user transcripts)
-    USER_NOT_INTERESTED_PATTERNS = [
-        r'नहीं.*चाहिए',
-        r'interested नहीं',
-        r'जरूरत नहीं',
-        r'बात नहीं करना',
-        r'रुचि नहीं',
-        r'परेशान.*मत.*करो',
-        r'फ़ोन.*मत.*करो',
-        r'नहीं.*चाहिए.*appointment',
-        r'time.*नहीं.*है',
-        r'busy.*हूं',
-        r'कट.*दो.*फ़ोन',
-    ]
-
-    @classmethod
-    def should_hangup_for_appointment(cls, ai_response: str) -> bool:
-        """Check if AI response indicates call should end after appointment"""
-        for pattern in cls.APPOINTMENT_SUCCESS_PATTERNS:
-            if re.search(pattern, ai_response, re.IGNORECASE):
-                return True
-        return False
-
-    @classmethod
-    def should_hangup_for_reschedule(cls, ai_response: str) -> bool:
-        """Check if AI response indicates call should end after reschedule"""
-        for pattern in cls.RESCHEDULE_SUCCESS_PATTERNS:
-            if re.search(pattern, ai_response, re.IGNORECASE):
-                return True
-        return False
-
-    @classmethod
-    def should_hangup_for_not_interested(cls, ai_response: str) -> bool:
-        """Check if AI response indicates call should end due to user not interested"""
-        for pattern in cls.NOT_INTERESTED_PATTERNS:
-            if re.search(pattern, ai_response, re.IGNORECASE):
-                return True
-        return False
-
-    @classmethod
-    def detect_user_not_interested(cls, conversation_transcript: list) -> bool:
-        """Detect if user has expressed disinterest in the conversation"""
-        full_conversation = " ".join(conversation_transcript)
-
-        for pattern in cls.USER_NOT_INTERESTED_PATTERNS:
-            if re.search(pattern, full_conversation, re.IGNORECASE):
-                return True
-        return False
-
-    @classmethod
-    def extract_callback_time_from_ai_response(cls, ai_response: str) -> dict:
-        """Enhanced extraction of callback time details with validation and cleaning"""
-        callback_info = {
-            "callback_date": None,
-            "callback_time": None,
-            "callback_day": None,
-            "callback_period": None,
-            "ai_response": ai_response
-        }
-
-        # Enhanced date patterns with validation
-        date_patterns = [
-            (r'(\d{1,2}[-/]\d{1,2}[-/]\d{4})', 'dd-mm-yyyy'),  # DD-MM-YYYY or DD/MM/YYYY
-            (r'(\d{4}[-/]\d{1,2}[-/]\d{1,2})', 'yyyy-mm-dd'),  # YYYY-MM-DD or YYYY/MM/DD
-            (
-            r'(\d{1,2})\s*(जनवरी|फरवरी|मार्च|अप्रैल|मई|जून|जुलाई|अगस्त|सितंबर|अक्टूबर|नवंबर|दिसंबर)', 'dd-month-hindi'),
-            (r'(\d{1,2})\s*(january|february|march|april|may|june|july|august|september|october|november|december)',
-             'dd-month-english'),
-        ]
-
-        # Enhanced time patterns with Hindi and English support
-        time_patterns = [
-            (r'(\d{1,2}:\d{2})', 'hh:mm'),  # HH:MM format
-            (r'(\d{1,2})\s*बजे', 'hindi-hour'),  # X o'clock in Hindi
-            (r'(\d{1,2})\s*(AM|PM|am|pm)', 'english-ampm'),  # X AM/PM
-            (r'(सुबह)\s*(\d{1,2})', 'morning-hour'),  # Morning X
-            (r'(शाम)\s*(\d{1,2})', 'evening-hour'),  # Evening X
-            (r'(दोपहर)\s*(\d{1,2})', 'afternoon-hour'),  # Afternoon X
-        ]
-
-        # Day patterns with normalization
-        day_patterns = [
-            (r'(सोमवार|monday)', 'Monday'),
-            (r'(मंगलवार|tuesday)', 'Tuesday'),
-            (r'(बुधवार|wednesday)', 'Wednesday'),
-            (r'(गुरुवार|thursday)', 'Thursday'),
-            (r'(शुक्रवार|friday)', 'Friday'),
-            (r'(शनिवार|saturday)', 'Saturday'),
-            (r'(रविवार|sunday)', 'Sunday'),
-        ]
-
-        # Relative day patterns
-        relative_day_patterns = [
-            (r'(कल)', 'Tomorrow'),
-            (r'(परसों)', 'Day After Tomorrow'),
-            (r'(आज)', 'Today'),
-            (r'(\d+)\s*दिन.*बाद', 'X Days Later'),
-            (r'अगले\s*(सप्ताह|हफ्ते)', 'Next Week'),
-        ]
-
-        # Time period patterns with standardization
-        period_patterns = [
-            (r'(सुबह|morning)', 'Morning'),
-            (r'(दोपहर|afternoon)', 'Afternoon'),
-            (r'(शाम|evening)', 'Evening'),
-            (r'(रात|night)', 'Night'),
-        ]
-
-        # Extract and validate dates
-        for pattern, date_type in date_patterns:
-            matches = re.findall(pattern, ai_response, re.IGNORECASE)
-            if matches:
-                raw_date = matches[0] if isinstance(matches[0], str) else ' '.join(matches[0])
-                callback_info["callback_date"] = cls._normalize_date(raw_date, date_type)
-                break
-
-        # Extract and validate times
-        for pattern, time_type in time_patterns:
-            matches = re.findall(pattern, ai_response, re.IGNORECASE)
-            if matches:
-                raw_time = matches[0] if isinstance(matches[0], str) else ' '.join(matches[0])
-                callback_info["callback_time"] = cls._normalize_time(raw_time, time_type)
-                break
-
-        # Extract and normalize days
-        for pattern, normalized_day in day_patterns:
-            if re.search(pattern, ai_response, re.IGNORECASE):
-                callback_info["callback_day"] = normalized_day
-                break
-
-        # Check for relative days if no specific day found
-        if not callback_info["callback_day"]:
-            for pattern, relative_day in relative_day_patterns:
-                matches = re.findall(pattern, ai_response, re.IGNORECASE)
-                if matches:
-                    if 'Days Later' in relative_day and len(matches) > 0:
-                        callback_info["callback_day"] = f"{matches[0]} Days Later"
-                    else:
-                        callback_info["callback_day"] = relative_day
-                    break
-
-        # Extract and normalize time periods
-        for pattern, normalized_period in period_patterns:
-            if re.search(pattern, ai_response, re.IGNORECASE):
-                callback_info["callback_period"] = normalized_period
-                break
-
-        # Validate and clean extracted data
-        callback_info = cls._validate_callback_info(callback_info)
-
-        return callback_info
-
-    @classmethod
-    def _normalize_date(cls, raw_date: str, date_type: str) -> str:
-        """Normalize date formats for consistency"""
-        try:
-            if date_type == 'dd-mm-yyyy':
-                # Convert DD-MM-YYYY or DD/MM/YYYY to standard format
-                date_parts = re.split(r'[-/]', raw_date)
-                if len(date_parts) == 3:
-                    return f"{date_parts[0].zfill(2)}-{date_parts[1].zfill(2)}-{date_parts[2]}"
-            elif date_type == 'yyyy-mm-dd':
-                # Convert YYYY-MM-DD to DD-MM-YYYY
-                date_parts = re.split(r'[-/]', raw_date)
-                if len(date_parts) == 3:
-                    return f"{date_parts[2].zfill(2)}-{date_parts[1].zfill(2)}-{date_parts[0]}"
-            elif 'month' in date_type:
-                # Handle month names (keep as is for now)
-                return raw_date.strip()
-        except Exception:
-            pass
-        return raw_date.strip()
-
-    @classmethod
-    def _normalize_time(cls, raw_time: str, time_type: str) -> str:
-        """Normalize time formats for consistency"""
-        try:
-            if time_type == 'hh:mm':
-                # Validate HH:MM format
-                time_parts = raw_time.split(':')
-                if len(time_parts) == 2:
-                    hour = int(time_parts[0])
-                    minute = int(time_parts[1])
-                    if 0 <= hour <= 23 and 0 <= minute <= 59:
-                        return f"{hour:02d}:{minute:02d}"
-            elif time_type == 'hindi-hour':
-                # Extract hour from Hindi format
-                hour_match = re.search(r'(\d{1,2})', raw_time)
-                if hour_match:
-                    hour = int(hour_match.group(1))
-                    if 1 <= hour <= 12:
-                        return f"{hour} बजे"
-            elif time_type == 'english-ampm':
-                # Normalize AM/PM format
-                return raw_time.upper()
-            elif 'hour' in time_type:
-                # Handle morning/evening hour patterns
-                return raw_time.strip()
-        except Exception:
-            pass
-        return raw_time.strip()
-
-    @classmethod
-    def _validate_callback_info(cls, callback_info: dict) -> dict:
-        """Validate and clean callback information"""
-        # Remove None values and empty strings
-        cleaned_info = {}
-        for key, value in callback_info.items():
-            if value and str(value).strip():
-                cleaned_info[key] = str(value).strip()
-            else:
-                cleaned_info[key] = None
-
-        # Validate logical consistency
-        if cleaned_info.get("callback_time") and cleaned_info.get("callback_period"):
-            # Check if time and period are consistent
-            time_value = cleaned_info["callback_time"]
-            period_value = cleaned_info["callback_period"]
-
-            # Basic validation logic (can be enhanced)
-            if "Morning" in period_value and any(x in time_value for x in ["शाम", "evening", "PM", "pm"]):
-                # Conflicting time and period, prefer period
-                cleaned_info["callback_time"] = None
-
-        return cleaned_info
+# Global instance of CallHangupManager
+hangup_manager = CallHangupManager()
 
 
-# Initialize hangup manager
-hangup_manager = CallHangupManager(settings.AUTO_HANGUP_DELAY)
-
-
-def read_hospital_records(filename="Hospital_Records.xlsx"):
-    global records
-    wb = openpyxl.load_workbook(filename)
-    ws = wb.active
-
-    for row in ws.iter_rows(min_row=2, values_only=True):
-        record = {
-            "name": row[0],
-            "phone_number": row[1],
-            "address": row[2],
-            "age": row[3],
-            "gender": row[4],
-        }
-        records.append(record)
-
-
-def detect_reschedule_from_ai_response():
+def extract_appointment_details():
     """
-    Enhanced detection of reschedule requests from AI responses with better accuracy
+    Extract date, time, and doctor information from the conversation transcript.
+    Returns a dictionary with extracted appointment details.
+    """
+    # Combine all transcripts into one text for analysis
+    full_conversation = " ".join(conversation_transcript)
+
+    extracted_info = {
+        "appointment_date": None,
+        "appointment_time": None,
+        "time_slot": None,
+        "doctor_name": "Doctor",  # Default doctor name
+        "raw_conversation": full_conversation,
+        "appointment_confirmed": False
+    }
+
+    # Enhanced date patterns for Hindi/English dates
+    date_patterns = [
+        r'(\d{1,2}[-/]\d{1,2}[-/]\d{4})',  # DD-MM-YYYY or DD/MM/YYYY
+        r'(\d{4}[-/]\d{1,2}[-/]\d{1,2})',  # YYYY-MM-DD or YYYY/MM/DD
+        r'(\d{1,2}\s*\w+\s*\d{4})',  # DD Month YYYY
+        r'(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)',  # English days
+        r'(सोमवार|मंगलवार|बुधवार|गुरुवार|शुक्रवार|शनिवार|रविवार)',  # Hindi days
+        r'(आज|कल|परसों)',  # Today, tomorrow, day after tomorrow
+        r'(tomorrow|today|day after tomorrow)',  # English equivalents
+    ]
+
+    # Enhanced time slot patterns
+    time_patterns = [
+        r'(morning|सुबह)',  # Morning
+        r'(afternoon|दोपहर)',  # Afternoon
+        r'(evening|शाम)',  # Evening
+        r'(night|रात)',  # Night
+        r'(\d{1,2}:\d{2})',  # HH:MM format
+        r'(\d{1,2}\s*बजे)',  # X o'clock in Hindi
+        r'(\d{1,2}\s*से\s*\d{1,2}:\d{2})',  # Time range
+        r'(\d{1,2}\s*AM|\d{1,2}\s*PM)',  # AM/PM format
+        r'(\d{1,2}\s*से\s*\d{1,2})',  # X से Y format
+    ]
+
+    # Doctor name patterns (updated for flexibility)
+    doctor_patterns = [
+        r'डॉ\.\s*(\w+)',  # Dr. [Name]
+        r'डॉक्टर\s*(\w+)',  # Doctor [Name]
+        r'डॉ\s*(\w+)',  # Dr [Name] without dot
+        r'doctor\s*([^,\s]+)',  # English doctor pattern
+    ]
+
+    # Extract dates
+    for pattern in date_patterns:
+        matches = re.findall(pattern, full_conversation, re.IGNORECASE)
+        if matches:
+            extracted_info["appointment_date"] = matches[0]
+            break
+
+    # Extract time information
+    for pattern in time_patterns:
+        matches = re.findall(pattern, full_conversation, re.IGNORECASE)
+        if matches:
+            extracted_info["appointment_time"] = matches[0]
+            break
+
+    # Extract doctor name
+    for pattern in doctor_patterns:
+        matches = re.findall(pattern, full_conversation, re.IGNORECASE)
+        if matches:
+            extracted_info["doctor_name"] = f"डॉ. {matches[0]}"
+            break
+
+    # Determine time slot based on words found
+    conversation_lower = full_conversation.lower()
+    if 'morning' in conversation_lower or 'सुबह' in conversation_lower:
+        extracted_info["time_slot"] = "morning"
+    elif 'afternoon' in conversation_lower or 'दोपहर' in conversation_lower:
+        extracted_info["time_slot"] = "afternoon"
+    elif 'evening' in conversation_lower or 'शाम' in conversation_lower:
+        extracted_info["time_slot"] = "evening"
+    elif 'night' in conversation_lower or 'रात' in conversation_lower:
+        extracted_info["time_slot"] = "night"
+
+    # Check if appointment was confirmed with updated keywords
+    confirmation_keywords = [
+        "slot book कर लिया",
+        "बुक कर दिया है",
+        "अपॉइंटमेंट.*बुक.*है",
+        "आपका अपॉइंटमेंट.*फिक्स",
+        "तो मैंने.*बुक कर दिया",
+        "शानदार.*बुक कर दिया"
+    ]
+    extracted_info["appointment_confirmed"] = any(
+        re.search(keyword, full_conversation, re.IGNORECASE) for keyword in confirmation_keywords
+    )
+
+    return extracted_info
+
+
+def detect_reschedule_request():
+    """
+    Detect if the conversation indicates a reschedule request
     Returns True if reschedule detected, False otherwise
     """
     full_conversation = " ".join(conversation_transcript)
 
-    # Primary reschedule indicators - AI acknowledging user's reschedule request
-    primary_reschedule_patterns = [
-        r'बिल्कुल समझ सकती हूँ.*कोई बात नहीं',  # I completely understand, no problem
-        r'आप बताइए कि कब.*कॉल करना ठीक',  # Tell me when to call
-        r'कब कॉल करना ठीक लगेगा',  # When should I call
-        r'कोई खास दिन सूट करता है',  # Any specific day that suits
-        r'समय के बारे में.*सुबह.*दोपहर.*शाम',  # About time - morning, afternoon, evening
+    # Primary reschedule indicators
+    reschedule_patterns = [
+        r'बिल्कुल समझ सकती हूँ.*कोई बात नहीं',
+        r'आप बताइए कि कब.*कॉल करना ठीक',
+        r'कब कॉल करना ठीक लगेगा',
+        r'कोई खास दिन सूट करता है',
+        r'समय के बारे में.*सुबह.*दोपहर.*शाम',
+        r'बाद में.*कॉल.*करें',
+        r'अभी.*समय.*नहीं',
+        r'व्यस्त.*हूं',
+        r'कल.*कॉल.*करना',
+        r'शाम.*को.*कॉल',
+        r'सुबह.*कॉल.*करें',
+        r'अगले.*हफ्ते',
+        r'partner से पूछना है',
+        r'tentative slot hold कर लेती हूँ'
     ]
 
-    # Secondary reschedule indicators - user expressing need to reschedule
-    user_reschedule_patterns = [
-        r'बाद में.*कॉल.*करें',  # Call later
-        r'अभी.*समय.*नहीं',  # No time now
-        r'व्यस्त.*हूं',  # I'm busy
-        r'कल.*कॉल.*करना',  # Call tomorrow
-        r'शाम.*को.*कॉल',  # Call in evening
-        r'सुबह.*कॉल.*करें',  # Call in morning
-        r'अगले.*हफ्ते',  # Next week
-    ]
-
-    # Check for primary patterns first (higher confidence)
-    for pattern in primary_reschedule_patterns:
+    for pattern in reschedule_patterns:
         if re.search(pattern, full_conversation, re.IGNORECASE):
-            print(f"🎯 Primary reschedule pattern detected: {pattern}")
             return True
-
-    # Check for user patterns with AI acknowledgment
-    user_indicated_reschedule = False
-    for pattern in user_reschedule_patterns:
-        if re.search(pattern, full_conversation, re.IGNORECASE):
-            user_indicated_reschedule = True
-            break
-
-    # If user indicated reschedule, look for AI acknowledgment
-    if user_indicated_reschedule:
-        ai_acknowledgment_patterns = [
-            r'समझ सकती हूँ',  # I understand
-            r'कोई बात नहीं',  # No problem
-            r'ठीक है',  # Okay
-        ]
-        for pattern in ai_acknowledgment_patterns:
-            if re.search(pattern, full_conversation, re.IGNORECASE):
-                print(f"🎯 User reschedule + AI acknowledgment detected")
-                return True
 
     return False
 
 
-def detect_not_interested_response():
+def extract_reschedule_details():
     """
-    Detect if user is clearly not interested from AI responses
+    Extract reschedule callback details from conversation
+    Returns dictionary with callback preferences
     """
     full_conversation = " ".join(conversation_transcript)
 
-    not_interested_patterns = [
-        'कोई बात नहीं.*उपलब्ध हैं',
-        'जब भी.*तैयार महसूस',
-        'धन्यवाद.*अच्छा दिन',
-        'समझ सकती.*interested नहीं',
-    ]
-
-    for pattern in not_interested_patterns:
-        if re.search(pattern, full_conversation, re.IGNORECASE):
-            return True
-
-    return False
-
-
-def calculate_call_duration():
-    """Calculate call duration in seconds"""
-    global call_start_time
-    if call_start_time:
-        return int(time.time() - call_start_time)
-    return 0
-
-
-def determine_incomplete_reason():
-    """
-    Determine the reason for incomplete call based on conversation analysis
-    """
-    call_duration = calculate_call_duration()
-    conversation_text = " ".join(conversation_transcript)
-
-    if call_duration < 15:
-        return "call_too_short"
-
-    if detect_not_interested_response():
-        return "not_interested"
-
-    if len(conversation_transcript) < 3:
-        return "minimal_interaction"
-
-    user_responses = [msg for msg in conversation_transcript if not msg.startswith("AI:")]
-    if len(user_responses) == 0:
-        return "no_user_response"
-
-    return "unclear_outcome"
-
-
-def append_incomplete_call_to_excel(patient_record, incomplete_reason, filename="Incomplete_Calls.xlsx"):
-    """
-    Append incomplete call details to Excel file
-    """
-    headers = [
-        "Name",
-        "Phone Number",
-        "Address",
-        "Age",
-        "Gender",
-        "Call Timestamp",
-        "Call Duration (seconds)",
-        "Incomplete Reason",
-        "Last AI Response",
-        "User Responses Count",
-        "Notes"
-    ]
-
-    if os.path.exists(filename):
-        wb = openpyxl.load_workbook(filename)
-        ws = wb.active
-        print(f"Loaded existing incomplete calls Excel file with {ws.max_row} rows of data")
-    else:
-        wb = Workbook()
-        ws = wb.active
-        ws.title = "Incomplete Calls"
-
-        for col, header in enumerate(headers, 1):
-            cell = ws.cell(row=1, column=col, value=header)
-            cell.font = openpyxl.styles.Font(bold=True)
-        print("Created new incomplete calls Excel file with headers")
-
-    next_row = ws.max_row + 1
-    print(f"Appending incomplete call data to row {next_row}")
-
-    last_ai_response = ""
-    for msg in reversed(conversation_transcript):
-        if msg.startswith("AI:") or not msg.startswith("USER:"):
-            last_ai_response = msg.replace("AI:", "").strip()[:100] + "..."
-            break
-
-    user_responses_count = len([msg for msg in conversation_transcript if not msg.startswith("AI:")])
-
-    notes_map = {
-        "call_too_short": "Call ended within 15 seconds",
-        "not_interested": "User clearly declined service",
-        "minimal_interaction": "Very few exchanges in conversation",
-        "no_user_response": "User didn't respond to AI",
-        "unclear_outcome": "Call ended without clear resolution"
+    callback_info = {
+        "callback_date": None,
+        "callback_time": None,
+        "callback_day": None,
+        "callback_period": None,
+        "raw_conversation": full_conversation
     }
 
-    incomplete_data = [
-        patient_record.get('name', ''),
-        patient_record.get('phone_number', ''),
-        patient_record.get('address', ''),
-        patient_record.get('age', ''),
-        patient_record.get('gender', ''),
-        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        calculate_call_duration(),
-        incomplete_reason,
-        last_ai_response,
-        user_responses_count,
-        notes_map.get(incomplete_reason, "Call incomplete")
+    # Enhanced date patterns
+    date_patterns = [
+        (r'(\d{1,2}[-/]\d{1,2}[-/]\d{4})', 'dd-mm-yyyy'),
+        (r'(\d{4}[-/]\d{1,2}[-/]\d{1,2})', 'yyyy-mm-dd'),
+        (r'(\d{1,2})\s*(जनवरी|फरवरी|मार्च|अप्रैल|मई|जून|जुलाई|अगस्त|सितंबर|अक्टूबर|नवंबर|दिसंबर)', 'dd-month-hindi'),
     ]
 
-    for col, value in enumerate(incomplete_data, 1):
-        ws.cell(row=next_row, column=col, value=value)
+    # Time patterns
+    time_patterns = [
+        (r'(\d{1,2}:\d{2})', 'hh:mm'),
+        (r'(\d{1,2})\s*बजे', 'hindi-hour'),
+        (r'(\d{1,2})\s*(AM|PM|am|pm)', 'english-ampm'),
+        (r'(सुबह)\s*(\d{1,2})', 'morning-hour'),
+        (r'(शाम)\s*(\d{1,2})', 'evening-hour'),
+        (r'(दोपहर)\s*(\d{1,2})', 'afternoon-hour'),
+    ]
 
-    for column in ws.columns:
-        max_length = 0
-        column_letter = column[0].column_letter
-        for cell in column:
-            if cell.value:
-                max_length = max(max_length, len(str(cell.value)))
-        ws.column_dimensions[column_letter].width = min(max_length + 2, 50)
+    # Day patterns
+    day_patterns = [
+        (r'(सोमवार|monday)', 'Monday'),
+        (r'(मंगलवार|tuesday)', 'Tuesday'),
+        (r'(बुधवार|wednesday)', 'Wednesday'),
+        (r'(गुरुवार|thursday)', 'Thursday'),
+        (r'(शुक्रवार|friday)', 'Friday'),
+        (r'(शनिवार|saturday)', 'Saturday'),
+        (r'(रविवार|sunday)', 'Sunday'),
+        (r'(कल)', 'Tomorrow'),
+        (r'(परसों)', 'Day After Tomorrow'),
+    ]
 
-    try:
-        wb.save(filename)
-        print(f"✅ Incomplete call saved to {filename} at row {next_row}")
-        return True
-    except Exception as e:
-        print(f"❌ Error saving incomplete call: {e}")
-        return False
+    # Period patterns
+    period_patterns = [
+        (r'(सुबह|morning)', 'Morning'),
+        (r'(दोपहर|afternoon)', 'Afternoon'),
+        (r'(शाम|evening)', 'Evening'),
+        (r'(रात|night)', 'Night'),
+    ]
+
+    # Extract information using patterns
+    for pattern, date_type in date_patterns:
+        matches = re.findall(pattern, full_conversation, re.IGNORECASE)
+        if matches:
+            callback_info["callback_date"] = matches[0] if isinstance(matches[0], str) else ' '.join(matches[0])
+            break
+
+    for pattern, time_type in time_patterns:
+        matches = re.findall(pattern, full_conversation, re.IGNORECASE)
+        if matches:
+            callback_info["callback_time"] = matches[0] if isinstance(matches[0], str) else ' '.join(matches[0])
+            break
+
+    for pattern, normalized_day in day_patterns:
+        if re.search(pattern, full_conversation, re.IGNORECASE):
+            callback_info["callback_day"] = normalized_day
+            break
+
+    for pattern, normalized_period in period_patterns:
+        if re.search(pattern, full_conversation, re.IGNORECASE):
+            callback_info["callback_period"] = normalized_period
+            break
+
+    return callback_info
 
 
-def append_not_interested_to_excel(patient_record, filename="Not_Interested_Calls.xlsx"):
+def should_terminate_call(transcript):
+    """Check if call should be terminated based on transcript content"""
+    import re
+
+    # Specific farewell phrases from the script
+    definitive_farewell_phrases = [
+        "आपका दिन शुभ हो",
+        "आपका दिन मंगलमय हो",
+        "अलविदा, आपका दिन अच्छा हो",
+        "Take care! आपका दिन शुभ हो",
+        "धन्यवाद! आपका दिन मंगलमय हो"
+    ]
+
+    # Enhanced regex patterns for farewell detection
+    farewell_patterns = [
+        # Definitive farewell endings from script
+        r'.?आपका दिन शुभ हो\s*[।!]?\s*$',
+        r'.?आपका दिन मंगलमय हो\s*[।!]?\s*$',
+        r'.?अलविदा.*आपका दिन अच्छा हो\s*[।!]?\s*$',
+        r'.?Take care.*आपका दिन शुभ हो\s*[।!]?\s*$',
+        r'.?धन्यवाद.*आपका दिन मंगलमय हो\s*[।!]?\s*$',
+
+        # Available for help + farewell
+        r'available हूँ.*आपका दिन शुभ हो',
+        r'help के लिए.*आपका दिन.*हो',
+        r'WhatsApp पर भेज रही हूँ.*doubt हो.*message करिए.*(आपका दिन.*हो)'
+    ]
+
+    # Check each pattern
+    for pattern in farewell_patterns:
+        if re.search(pattern, transcript, re.IGNORECASE | re.DOTALL):
+            return True, "goodbye_detected"
+
+    # Check if transcript ends with definitive goodbye phrases
+    transcript_cleaned = transcript.strip()
+    for phrase in definitive_farewell_phrases:
+        if transcript_cleaned.endswith(phrase) or phrase in transcript_cleaned[-50:]:  # Check last 50 characters
+            return True, "goodbye_detected"
+
+    return False, None
+
+
+def append_appointment_to_excel(appointment_details, patient_record, filename="Appointment_Details.xlsx"):
     """
-    Append not interested call details to Excel file
+    Append appointment details to Excel file with doctor name
     """
     headers = [
         "Name",
-        "Phone Number",
+        "Appointment Date",
+        "Time Slot",
+        "Doctor Name",  # Added doctor name column
         "Age",
         "Gender",
-        "Call Timestamp",
-        "Call Duration (seconds)",
-        "Reason",
-        "Notes"
+        "Phone Number",
+        "Address",
+        "Timestamp"
     ]
 
+    # Check if file exists
     if os.path.exists(filename):
+        # Load existing workbook - THIS PRESERVES ALL EXISTING DATA
         wb = openpyxl.load_workbook(filename)
         ws = wb.active
-        print(f"Loaded existing not interested Excel file with {ws.max_row} rows of data")
+        print(f"📊 Loaded existing Excel file with {ws.max_row} rows of data")
     else:
+        # Create new workbook with headers ONLY if file doesn't exist
         wb = Workbook()
         ws = wb.active
-        ws.title = "Not Interested Calls"
+        ws.title = "Appointment Details"
 
+        # Add headers with formatting
         for col, header in enumerate(headers, 1):
             cell = ws.cell(row=1, column=col, value=header)
             cell.font = openpyxl.styles.Font(bold=True)
-        print("Created new not interested Excel file with headers")
 
+        print("📝 Created new Excel file with headers")
+
+    # Find the next empty row - THIS ENSURES NO OVERWRITING
     next_row = ws.max_row + 1
-    print(f"Appending not interested call data to row {next_row}")
+    print(f"➕ Appending data to row {next_row}")
 
-    not_interested_data = [
+    # Prepare data row with doctor name
+    appointment_data = [
         patient_record.get('name', ''),
-        patient_record.get('phone_number', ''),
+        appointment_details.get('appointment_date', ''),
+        appointment_details.get('appointment_time', '') or appointment_details.get('time_slot', ''),
+        appointment_details.get('doctor_name', 'डॉ. निशा'),  # Added doctor name
         patient_record.get('age', ''),
         patient_record.get('gender', ''),
-        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        calculate_call_duration(),
-        "User not interested",
-        "Customer declined consultation offer"
+        patient_record.get('phone_number', ''),
+        patient_record.get('address', ''),
+        datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     ]
 
-    for col, value in enumerate(not_interested_data, 1):
+    # Add data to the next row
+    for col, value in enumerate(appointment_data, 1):
         ws.cell(row=next_row, column=col, value=value)
 
-    for column in ws.columns:
-        max_length = 0
-        column_letter = column[0].column_letter
-        for cell in column:
-            if cell.value:
-                max_length = max(max_length, len(str(cell.value)))
-        ws.column_dimensions[column_letter].width = min(max_length + 2, 50)
-
+    # Save the workbook
     try:
         wb.save(filename)
-        print(f"✅ Not interested call saved to {filename} at row {next_row}")
+        print(f"✅ Appointment details saved to {filename} at row {next_row}")
+        print(f"👩‍⚕ Doctor assigned: {appointment_details.get('doctor_name', 'डॉ. निशा')}")
         return True
     except Exception as e:
-        print(f"❌ Error saving not interested call: {e}")
+        print(f"❌ Error saving appointment details: {e}")
         return False
 
 
 def append_reschedule_to_excel(patient_record, callback_details=None, filename="Reschedule_Requests.xlsx"):
     """
-    Enhanced function to append reschedule request with validated callback time details to Excel file
+    Append reschedule request details to Excel file
     """
     headers = [
         "Name",
@@ -666,7 +460,6 @@ def append_reschedule_to_excel(patient_record, callback_details=None, filename="
         "Preferred Callback Time",
         "Preferred Callback Day",
         "Preferred Callback Period",
-        "Callback Notes",
         "Status",
         "Priority"
     ]
@@ -674,7 +467,7 @@ def append_reschedule_to_excel(patient_record, callback_details=None, filename="
     if os.path.exists(filename):
         wb = openpyxl.load_workbook(filename)
         ws = wb.active
-        print(f"Loaded existing reschedule Excel file with {ws.max_row} rows of data")
+        print(f"📊 Loaded existing reschedule Excel file with {ws.max_row} rows of data")
     else:
         wb = Workbook()
         ws = wb.active
@@ -683,36 +476,23 @@ def append_reschedule_to_excel(patient_record, callback_details=None, filename="
         for col, header in enumerate(headers, 1):
             cell = ws.cell(row=1, column=col, value=header)
             cell.font = openpyxl.styles.Font(bold=True)
-        print("Created new reschedule Excel file with headers")
+        print("📝 Created new reschedule Excel file with headers")
 
     next_row = ws.max_row + 1
-    print(f"Appending reschedule data to row {next_row}")
+    print(f"➕ Appending reschedule data to row {next_row}")
 
-    # Initialize with defaults
+    # Default values
     callback_date = ""
     callback_time = ""
     callback_day = ""
     callback_period = ""
-    callback_notes = "Customer requested reschedule"
     priority = "Medium"
 
     if callback_details:
-        # Extract and clean callback information
         callback_date = callback_details.get('callback_date') or ""
         callback_time = callback_details.get('callback_time') or ""
         callback_day = callback_details.get('callback_day') or ""
         callback_period = callback_details.get('callback_period') or ""
-
-        # Generate comprehensive and clean notes
-        notes_parts = []
-        if callback_date:
-            notes_parts.append(f"Date: {callback_date}")
-        if callback_time:
-            notes_parts.append(f"Time: {callback_time}")
-        if callback_day:
-            notes_parts.append(f"Day: {callback_day}")
-        if callback_period:
-            notes_parts.append(f"Period: {callback_period}")
 
         # Determine priority based on specificity
         specificity_score = 0
@@ -728,20 +508,6 @@ def append_reschedule_to_excel(patient_record, callback_details=None, filename="
         else:
             priority = "Low"
 
-        if notes_parts:
-            callback_notes = f"Customer requested callback - {', '.join(notes_parts)}"
-        else:
-            callback_notes = "Customer requested reschedule - No specific time mentioned"
-            priority = "Low"
-
-    # Validate data before inserting
-    validated_data = _validate_reschedule_data({
-        'date': callback_date,
-        'time': callback_time,
-        'day': callback_day,
-        'period': callback_period
-    })
-
     reschedule_data = [
         patient_record.get('name', ''),
         patient_record.get('phone_number', ''),
@@ -749,11 +515,10 @@ def append_reschedule_to_excel(patient_record, callback_details=None, filename="
         patient_record.get('age', ''),
         patient_record.get('gender', ''),
         datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-        validated_data['date'],
-        validated_data['time'],
-        validated_data['day'],
-        validated_data['period'],
-        callback_notes,
+        callback_date,
+        callback_time,
+        callback_day,
+        callback_period,
         "Pending Callback",
         priority
     ]
@@ -761,186 +526,89 @@ def append_reschedule_to_excel(patient_record, callback_details=None, filename="
     for col, value in enumerate(reschedule_data, 1):
         ws.cell(row=next_row, column=col, value=value)
 
-    # Auto-adjust column widths
-    for column in ws.columns:
-        max_length = 0
-        column_letter = column[0].column_letter
-        for cell in column:
-            if cell.value:
-                max_length = max(max_length, len(str(cell.value)))
-        ws.column_dimensions[column_letter].width = min(max_length + 2, 50)
-
     try:
         wb.save(filename)
         print(f"✅ Reschedule request saved to {filename} at row {next_row}")
-        print(f"   📅 Priority: {priority} | Callback details: {callback_notes}")
         return True
     except Exception as e:
         print(f"❌ Error saving reschedule request: {e}")
         return False
 
 
-def _validate_reschedule_data(data: dict) -> dict:
-    """Validate and clean reschedule data before Excel insertion"""
-    validated = {
-        'date': '',
-        'time': '',
-        'day': '',
-        'period': ''
-    }
-
-    # Validate date
-    if data.get('date'):
-        date_str = str(data['date']).strip()
-        # Basic date validation
-        if re.match(r'\d{1,2}[-/]\d{1,2}[-/]\d{4}', date_str):
-            validated['date'] = date_str
-        elif any(month in date_str.lower() for month in ['january', 'february', 'march', 'april', 'may', 'june',
-                                                         'july', 'august', 'september', 'october', 'november',
-                                                         'december',
-                                                         'जनवरी', 'फरवरी', 'मार्च', 'अप्रैल', 'मई', 'जून']):
-            validated['date'] = date_str
-
-    # Validate time
-    if data.get('time'):
-        time_str = str(data['time']).strip()
-        # Accept various time formats
-        if any(pattern in time_str for pattern in [':', 'बजे', 'AM', 'PM', 'am', 'pm']):
-            validated['time'] = time_str
-
-    # Validate day
-    if data.get('day'):
-        day_str = str(data['day']).strip()
-        valid_days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday',
-                      'Tomorrow', 'Today', 'Day After Tomorrow', 'Next Week']
-        if any(day in day_str for day in valid_days) or 'Days Later' in day_str:
-            validated['day'] = day_str
-
-    # Validate period
-    if data.get('period'):
-        period_str = str(data['period']).strip()
-        valid_periods = ['Morning', 'Afternoon', 'Evening', 'Night']
-        if period_str in valid_periods:
-            validated['period'] = period_str
-
-    return validated
+def calculate_call_duration():
+    """Calculate call duration in seconds"""
+    global call_start_time
+    if call_start_time:
+        return int(time.time() - call_start_time)
+    return 0
 
 
-def extract_appointment_details_from_ai_response(ai_response):
+def append_incomplete_call_to_excel(patient_record, reason="call_incomplete", filename="Incomplete_Calls.xlsx"):
     """
-    Extract appointment details from current AI response only.
-    Returns a dictionary with extracted appointment details.
-    """
-    extracted_info = {
-        "appointment_date": None,
-        "appointment_time": None,
-        "time_slot": None,
-        "ai_response": ai_response
-    }
-
-    date_patterns = [
-        r'(\d{1,2}[-/]\d{1,2}[-/]\d{4})',
-        r'(\d{4}[-/]\d{1,2}[-/]\d{1,2})',
-        r'(\d{1,2}\s*\w+\s*\d{4})',
-    ]
-
-    time_patterns = [
-        r'(सुबह)',
-        r'(दोपहर)',
-        r'(शाम)',
-        r'(रात)',
-        r'(\d{1,2}:\d{2})',
-        r'(\d{1,2}\s*बजे)',
-    ]
-
-    for pattern in date_patterns:
-        matches = re.findall(pattern, ai_response)
-        if matches:
-            extracted_info["appointment_date"] = matches[0]
-            break
-
-    for pattern in time_patterns:
-        matches = re.findall(pattern, ai_response, re.IGNORECASE)
-        if matches:
-            extracted_info["appointment_time"] = matches[0]
-            break
-
-    if 'सुबह' in ai_response:
-        extracted_info["time_slot"] = "morning"
-    elif 'दोपहर' in ai_response:
-        extracted_info["time_slot"] = "afternoon"
-    elif 'शाम' in ai_response:
-        extracted_info["time_slot"] = "evening"
-    elif 'रात' in ai_response:
-        extracted_info["time_slot"] = "night"
-
-    confirmation_keywords = ['बुक कर दिया', 'अपॉइंटमेंट.*बुक', 'बुक.*है']
-    extracted_info["appointment_confirmed"] = any(
-        re.search(keyword, ai_response, re.IGNORECASE) for keyword in confirmation_keywords)
-
-    return extracted_info
-
-
-def append_appointment_to_excel(appointment_details, patient_record, filename="Appointment_Details.xlsx"):
-    """
-    Append appointment details to Excel file
+    Append incomplete call details to Excel file
     """
     headers = [
         "Name",
-        "Appointment Date",
-        "Time Slot",
-        "Age",
-        "Gender",
         "Phone Number",
         "Address",
-        "Timestamp"
+        "Age",
+        "Gender",
+        "Call Timestamp",
+        "Call Duration (seconds)",
+        "Reason",
+        "Notes"
     ]
 
     if os.path.exists(filename):
         wb = openpyxl.load_workbook(filename)
         ws = wb.active
-        print(f"Loaded existing Excel file with {ws.max_row} rows of data")
     else:
         wb = Workbook()
         ws = wb.active
-        ws.title = "Appointment Details"
+        ws.title = "Incomplete Calls"
 
         for col, header in enumerate(headers, 1):
-            ws.cell(row=1, column=col, value=header)
-        print("Created new Excel file with headers")
+            cell = ws.cell(row=1, column=col, value=header)
+            cell.font = openpyxl.styles.Font(bold=True)
 
     next_row = ws.max_row + 1
-    print(f"Appending data to row {next_row}")
 
-    appointment_data = [
+    reason_notes = {
+        "call_timeout": "Call exceeded time limit",
+        "call_incomplete": "Call ended without clear resolution",
+        "minimal_interaction": "Very few exchanges in conversation",
+        "goodbye_detected": "Call ended with natural goodbye"
+    }
+
+    incomplete_data = [
         patient_record.get('name', ''),
-        appointment_details.get('appointment_date', ''),
-        appointment_details.get('appointment_time', '') or appointment_details.get('time_slot', ''),
-        patient_record.get('age', ''),
-        patient_record.get('gender', ''),
         patient_record.get('phone_number', ''),
         patient_record.get('address', ''),
-        datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        patient_record.get('age', ''),
+        patient_record.get('gender', ''),
+        datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        calculate_call_duration(),
+        reason,
+        reason_notes.get(reason, "Call incomplete")
     ]
 
-    for col, value in enumerate(appointment_data, 1):
+    for col, value in enumerate(incomplete_data, 1):
         ws.cell(row=next_row, column=col, value=value)
 
     try:
         wb.save(filename)
-        print(f"Appointment details saved to {filename} at row {next_row}")
+        print(f"✅ Incomplete call saved to {filename} at row {next_row}")
         return True
     except Exception as e:
-        print(f"Error saving appointment details: {e}")
+        print(f"❌ Error saving incomplete call: {e}")
         return False
 
 
-def process_conversation_outcome(current_ai_response=None):
+async def process_conversation_outcome():
     """
-    Process the conversation to determine if it resulted in appointment booking, reschedule request, or not interested
-    Enhanced with auto-hangup functionality for all outcomes and callback time extraction
+    Process the conversation to determine outcome and save to appropriate Excel file
     """
-    global p_index, records, call_outcome_detected, current_plivo_call_uuid
+    global p_index, records, call_outcome_detected, current_call_uuid
 
     if p_index >= len(records):
         print("❌ No patient record available")
@@ -948,59 +616,33 @@ def process_conversation_outcome(current_ai_response=None):
 
     patient_record = records[p_index]
 
-    # Check for not interested first (from user transcript or AI response)
-    if (EnhancedOutcomeDetector.detect_user_not_interested(conversation_transcript) or
-            (current_ai_response and EnhancedOutcomeDetector.should_hangup_for_not_interested(current_ai_response))):
-        success = append_not_interested_to_excel(patient_record)
+    # Check for appointment booking first
+    appointment_details = extract_appointment_details()
+    if appointment_details.get("appointment_confirmed"):
+        success = append_appointment_to_excel(appointment_details, patient_record)
         if success:
-            print(f"❌ Not interested call recorded for {patient_record['name']}")
+            print(f"✅ Appointment booked for {patient_record['name']}")
+            print(f"   Date: {appointment_details.get('appointment_date', 'TBD')}")
+            print(f"   Time: {appointment_details.get('appointment_time', 'TBD')}")
             call_outcome_detected = True
 
-            # Auto-hangup for not interested
-            if current_ai_response and EnhancedOutcomeDetector.should_hangup_for_not_interested(current_ai_response):
-                print(f"🔚 Triggering auto-hangup for not interested user")
-                if current_plivo_call_uuid:
-                    asyncio.create_task(hangup_manager.schedule_hangup(current_plivo_call_uuid, "user_not_interested"))
+            # Schedule hangup
+            if current_call_uuid:
+                await hangup_manager.schedule_hangup(current_call_uuid, "appointment_confirmed")
         return
 
-    # Check for reschedule with enhanced callback time extraction
-    if detect_reschedule_from_ai_response():
-        # Extract callback time details from current AI response
-        callback_details = None
-        if current_ai_response:
-            callback_details = EnhancedOutcomeDetector.extract_callback_time_from_ai_response(current_ai_response)
-
+    # Check for reschedule request
+    if detect_reschedule_request():
+        callback_details = extract_reschedule_details()
         success = append_reschedule_to_excel(patient_record, callback_details)
         if success:
             print(f"📅 Reschedule request recorded for {patient_record['name']}")
             call_outcome_detected = True
 
-            # Check if we should hangup based on current AI response
-            if current_ai_response and EnhancedOutcomeDetector.should_hangup_for_reschedule(current_ai_response):
-                print(f"🔚 Triggering auto-hangup for reschedule")
-                if current_plivo_call_uuid:
-                    asyncio.create_task(
-                        hangup_manager.schedule_hangup(current_plivo_call_uuid, "reschedule_successful"))
+            # Schedule hangup
+            if current_call_uuid:
+                await hangup_manager.schedule_hangup(current_call_uuid, "reschedule_requested")
         return
-
-    # Check for appointment booking
-    if current_ai_response:
-        extracted_details = extract_appointment_details_from_ai_response(current_ai_response)
-        if extracted_details.get("appointment_confirmed"):
-            success = append_appointment_to_excel(extracted_details, patient_record)
-            if success:
-                print(f"✅ Appointment booked for {patient_record['name']}")
-                print(f"   Date: {extracted_details.get('appointment_date', 'TBD')}")
-                print(f"   Time: {extracted_details.get('appointment_time', 'TBD')}")
-                call_outcome_detected = True
-
-                # Check if we should hangup based on current AI response
-                if EnhancedOutcomeDetector.should_hangup_for_appointment(current_ai_response):
-                    print(f"🔚 Triggering auto-hangup for appointment")
-                    if current_plivo_call_uuid:
-                        asyncio.create_task(
-                            hangup_manager.schedule_hangup(current_plivo_call_uuid, "appointment_successful"))
-            return
 
     print(f"ℹ️ No clear outcome detected yet for {patient_record['name']}")
 
@@ -1017,14 +659,243 @@ def handle_call_end():
     patient_record = records[p_index]
 
     if not call_outcome_detected:
-        incomplete_reason = determine_incomplete_reason()
-        success = append_incomplete_call_to_excel(patient_record, incomplete_reason)
+        call_duration = calculate_call_duration()
+        if call_duration >= MAX_CALL_DURATION:
+            reason = "call_timeout"
+        elif len(conversation_transcript) < 3:
+            reason = "minimal_interaction"
+        else:
+            reason = "call_incomplete"
+
+        success = append_incomplete_call_to_excel(patient_record, reason)
         if success:
             print(f"⚠️ Incomplete call recorded for {patient_record['name']}")
-            print(f"   Reason: {incomplete_reason}")
-            print(f"   Duration: {calculate_call_duration()} seconds")
+            print(f"   Reason: {reason}")
+            print(f"   Duration: {call_duration} seconds")
 
     call_outcome_detected = False
+
+
+async def terminate_call_gracefully(websocket, realtime_ai_ws, reason="completed"):
+    """Gracefully terminate call and clean up all connections"""
+    global call_in_progress, current_call_session, current_call_uuid, call_timer_task, p_index
+
+    try:
+        print(f"🔚 Terminating call gracefully. Reason: {reason}")
+
+        # Cancel the call timer if it's running
+        if call_timer_task and not call_timer_task.done():
+            call_timer_task.cancel()
+            print("⏰ Call timer cancelled")
+
+        # Give a moment for the current message to finish playing
+        await asyncio.sleep(2)
+
+        try:
+            # Schedule the hangup with delay - this replaces the old Plivo termination
+            await hangup_manager.schedule_hangup(current_call_uuid, reason)
+            print(f"📞 Call hangup scheduled via CallHangupManager: {current_call_uuid}")
+        except Exception as e:
+            print(f"⚠ Failed to schedule call hangup: {e}")
+
+        # Close OpenAI connection first
+        if realtime_ai_ws and realtime_ai_ws.open:
+            await realtime_ai_ws.close()
+            print("✅ OpenAI WebSocket closed")
+
+        # End call session in database
+        if current_call_session:
+            await db_service.end_call_session(current_call_session.call_id)
+            await websocket_manager.broadcast_call_status(
+                call_id=current_call_session.call_id,
+                status="ended"
+            )
+            print(f"✅ Call session ended in database: {current_call_session.call_id}")
+
+        # Close WebSocket (this will end the stream)
+        if websocket and not websocket.client_state.DISCONNECTED:
+            await websocket.close()
+            print("✅ WebSocket closed - Stream terminated")
+
+        # IMPORTANT: Increment p_index after call completion
+        p_index += 1
+        print(f"📈 Call completed. Moving to next record. p_index now: {p_index}")
+
+        # Reset global flags
+        call_in_progress = False
+        current_call_session = None
+        current_call_uuid = None
+        conversation_transcript.clear()
+
+        print(f"🎯 Call termination completed successfully. Reason: {reason}")
+
+    except Exception as e:
+        print(f"❌ Error during call termination: {e}")
+        # Ensure flags are reset even on error
+        call_in_progress = False
+        current_call_session = None
+        current_call_uuid = None
+        # Still increment p_index on error to avoid infinite loop
+        p_index += 1
+        print(f"📈 Error occurred, but moving to next record. p_index now: {p_index}")
+
+
+def read_hospital_records(filename="Hospital_Records.xlsx"):
+    """Read all records from Excel file"""
+    global records
+    records = []  # Reset records list
+
+    wb = openpyxl.load_workbook(filename)
+    ws = wb.active
+
+    for row in ws.iter_rows(min_row=2, values_only=True):
+        if row[0] is not None:  # Skip empty rows
+            record = {
+                "name": row[0],
+                "phone_number": row[1],
+                "address": row[2],
+                "age": row[3],
+                "gender": row[4],
+            }
+            records.append(record)
+
+    print(f"Loaded {len(records)} records from Excel")
+    return len(records)
+
+
+async def make_call_via_webhook(phone_number, name, record_index):
+    """Make a call by triggering the webhook"""
+    global call_in_progress
+    try:
+        # Set the global p_index to the current record
+        global p_index
+        p_index = record_index
+
+        # Call the webhook endpoint
+        if phone_number not in [call['phone'] for call in called_numbers]:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(f"{settings.HOST_URL}/webhook")
+
+            if response.status_code == 200:
+                # Track successful call immediately when call is initiated
+                called_numbers.append({
+                    'phone': phone_number,
+                    'name': name,
+                    'record_index': record_index,
+                    'timestamp': time.strftime('%Y-%m-%d %H:%M:%S')
+                })
+                print(f"✅ Call initiated successfully to {phone_number} ({name}) - Record #{record_index}")
+                return True
+            else:
+                print(f"❌ Webhook failed for {phone_number} ({name}) - Status: {response.status_code}")
+                return False
+
+    except Exception as e:
+        print(f"❌ Failed to call {phone_number} ({name}): {e}")
+        return False
+
+
+def background_checker():
+    """Simple background checker that runs every 60 seconds"""
+    global last_processed_count, call_in_progress, p_index
+
+    print("🚀 Background checker started - monitoring every 60 seconds")
+
+    while True:
+        try:
+            print("📋 Checking for new records...")
+
+            # Read current records
+            current_count = read_hospital_records()
+
+            # Calculate new records based on p_index (not last_processed_count)
+            new_records = current_count - p_index
+
+            if new_records > 0 and not call_in_progress:
+                print(f"🔥 Found {new_records} NEW records! Processing from p_index: {p_index}")
+
+                # Check if we have a valid record to call
+                if p_index < len(records):
+                    record = records[p_index]
+                    phone_number = record.get('phone_number')
+                    name = record.get('name', 'Unknown')
+
+                    if phone_number:
+                        print(f"📞 Processing record #{p_index}: {phone_number} ({name})")
+
+                        # Make call via webhook
+                        success = asyncio.run(make_call_via_webhook(phone_number, name, p_index))
+
+                        if success:
+                            print(f"✅ Call initiated for {phone_number} ({name})")
+                            # Wait for call to complete before processing next
+                            print("⏳ Waiting for call to complete...")
+
+                            # Wait for call_in_progress to be reset
+                            wait_time = 0
+                            while call_in_progress and wait_time < 300:  # Max 5 minutes wait
+                                time.sleep(5)
+                                wait_time += 5
+                                print(f"⏳ Waiting for call completion... ({wait_time}s)")
+
+                            if call_in_progress:
+                                print("⚠ Call timeout - proceeding to next record")
+                                call_in_progress = False
+                                p_index += 1  # Force increment on timeout
+
+                        else:
+                            print(f"❌ Call failed for {phone_number} ({name})")
+                            call_in_progress = False
+                            p_index += 1  # Increment on failure
+
+                        # Small delay between records
+                        time.sleep(10)
+                    else:
+                        print(f"⏭ Skipping record #{p_index} - No phone number")
+                        p_index += 1  # Skip record with no phone number
+                else:
+                    print(f"✅ All records processed. p_index: {p_index}, total records: {current_count}")
+
+            elif call_in_progress:
+                print(f"⏸ Call in progress (p_index: {p_index}), waiting...")
+            else:
+                print(f"✅ No new records found. p_index: {p_index}, total records: {current_count}")
+
+        except Exception as e:
+            print(f"❌ Background check error: {e}")
+            call_in_progress = False  # Reset on error
+
+        # Wait 60 seconds before next check
+        print("⏳ Waiting 60 seconds for next check...")
+        time.sleep(60)
+
+
+def start_background_thread():
+    """Start the background checker thread"""
+    checker_thread = threading.Thread(target=background_checker, daemon=True)
+    checker_thread.start()
+    print("🔄 Background checker thread started")
+
+
+# Enhanced start_call_timer function
+async def start_call_timer(websocket, realtime_ai_ws, duration=MAX_CALL_DURATION):
+    """Start a timer to automatically terminate the call after specified duration"""
+    global call_timer_task, call_start_time
+
+    try:
+        call_start_time = time.time()
+        print(f"⏰ Call timer started - will terminate in {duration} seconds")
+        call_timer_task = asyncio.current_task()  # Store reference to current task
+        await asyncio.sleep(duration)
+
+        # If we reach here, the timer expired
+        print(f"⏰ Call duration limit ({duration}s) reached - terminating call")
+        await terminate_call_gracefully(websocket, realtime_ai_ws, "timeout")
+
+    except asyncio.CancelledError:
+        print("⏰ Call timer cancelled - call ended before timeout")
+    except Exception as e:
+        print(f"❌ Error in call timer: {e}")
 
 
 @app.get("/", response_class=JSONResponse)
@@ -1044,6 +915,7 @@ async def websocket_endpoint(websocket: WebSocket):
     """WebSocket endpoint for real-time transcript updates"""
     await websocket_manager.connect(websocket)
     try:
+        # Send initial connection confirmation
         await websocket.send_text(json.dumps({
             "type": "connection_status",
             "status": "connected",
@@ -1052,33 +924,38 @@ async def websocket_endpoint(websocket: WebSocket):
 
         while True:
             try:
+                # Set a timeout to prevent indefinite blocking
                 message = await asyncio.wait_for(
                     websocket.receive_text(),
                     timeout=30.0
                 )
 
+                # Parse and handle incoming messages
                 try:
                     data = json.loads(message)
 
+                    # Handle ping messages
                     if data.get("type") == "ping":
                         await websocket.send_text(json.dumps({
                             "type": "pong",
                             "timestamp": datetime.utcnow().isoformat()
                         }))
 
+                    # Handle other message types as needed
                     print(f"Received from dashboard: {data}")
 
                 except json.JSONDecodeError:
                     print(f"Invalid JSON received: {message}")
 
             except asyncio.TimeoutError:
+                # Send keepalive ping
                 try:
                     await websocket.send_text(json.dumps({
                         "type": "keepalive",
                         "timestamp": datetime.utcnow().isoformat()
                     }))
                 except:
-                    break
+                    break  # Connection is broken
 
     except WebSocketDisconnect:
         print("Dashboard WebSocket disconnected")
@@ -1090,107 +967,97 @@ async def websocket_endpoint(websocket: WebSocket):
 
 @app.get("/appointment-details")
 async def get_appointment_details():
-    """API endpoint to get extracted appointment details from latest AI response"""
-    if conversation_transcript:
-        last_ai_response = None
-        for msg in reversed(conversation_transcript):
-            if msg.startswith("AI:") or not msg.startswith("USER:"):
-                last_ai_response = msg.replace("AI:", "").strip()
-                break
-
-        if last_ai_response:
-            details = extract_appointment_details_from_ai_response(last_ai_response)
-            return JSONResponse(details)
-
-    return JSONResponse({"message": "No AI response available for extraction"})
-
-
-@app.post("/hangup")
-async def hangup_endpoint(request: Request):
-    """Endpoint to handle call hangup requests"""
-    try:
-        data = await request.json()
-        call_id = data.get("call_id")
-        reason = data.get("reason", "unknown")
-
-        logger.info(f"Hangup request received for call {call_id}, reason: {reason}")
-
-        return JSONResponse({
-            "status": "success",
-            "message": f"Hangup request processed for call {call_id}",
-            "timestamp": datetime.utcnow().isoformat()
-        })
-
-    except Exception as e:
-        logger.error(f"Error processing hangup request: {e}")
-        return JSONResponse({
-            "status": "error",
-            "message": "Invalid request"
-        }, status_code=400)
+    """API endpoint to get extracted appointment details"""
+    details = extract_appointment_details()
+    return JSONResponse(details)
 
 
 @app.api_route("/webhook", methods=["GET", "POST"])
-def home(request: Request):
-    global p_index, current_plivo_call_uuid
+async def webhook_handler(request: Request):
+    """Webhook handler for making calls"""
+    global p_index, call_in_progress, current_call_uuid
+
     if request.method == "POST":
-        p_index += 1
-        call_response = plivo_client.calls.create(
-            from_=settings.PLIVO_FROM_NUMBER,
-            to_=records[p_index]['phone_number'],
-            answer_url=settings.PLIVO_ANSWER_XML,
-            answer_method='GET')
+        print(f"📨 Webhook POST request received! p_index: {p_index}, records_length: {len(records)}")
 
-        # Store the call UUID for potential hangup
-        current_plivo_call_uuid = call_response.request_uuid
-        print(f"Call initiated with UUID: {current_plivo_call_uuid}")
+        # Safety check for valid index
+        if p_index < len(records) and p_index >= 0 and not call_in_progress:
+            phone_number = records[p_index]['phone_number']
+            name = records[p_index].get('name', 'Unknown')
 
-    xml_data = f'''<?xml version="1.0" encoding="UTF-8"?>
-    <Response>
-        <Speak>Please wait while we connect your call to the AI Agent. OK you can start speaking.</Speak>
-        <Stream streamTimeout="86400" keepCallAlive="true" bidirectional="true" contentType="audio/x-mulaw;rate=8000" audioTrack="inbound" >
-            {settings.HOST_URL}/media-stream
-        </Stream>
-    </Response>
-    '''
-    return HTMLResponse(xml_data, media_type='application/xml')
+            try:
+                call_made = plivo_client.calls.create(
+                    from_=settings.PLIVO_FROM_NUMBER,
+                    to_=phone_number,
+                    answer_url=settings.PLIVO_ANSWER_XML,
+                    answer_method='GET'
+                )
+                print(f"📞 Plivo call initiated to {phone_number} ({name}) - p_index: {p_index}")
+                call_in_progress = True
+                return {"status": "success", "called": phone_number, "p_index": p_index}
+
+            except Exception as e:
+                print(f"❌ Plivo call failed: {e}")
+                call_in_progress = False
+                return {"status": "error", "message": str(e)}
+        else:
+            print(f"❌ Invalid record index: p_index={p_index}, records_length={len(records)}")
+            call_in_progress = False
+            return {"status": "error", "message": f"Invalid record index: {p_index}"}
+
+    else:
+        # GET request - Call event from Plivo
+        query_params = dict(request.query_params)
+
+        # Extract important call information
+        call_uuid = query_params.get('CallUUID')
+        call_status = query_params.get('CallStatus')
+        event = query_params.get('Event')
+
+        print(f"📨 Webhook GET request received! (Call event for p_index: {p_index})")
+        print(f"📞 Call UUID: {call_uuid}, Status: {call_status}, Event: {event}")
+
+        # Store the UUID globally for later use
+        if call_uuid:
+            call_uuid_storage[p_index] = call_uuid
+            current_call_uuid = call_uuid
+            print(f"💾 Stored current Call UUID: {current_call_uuid} for p_index: {p_index}")
+
+        # Handle different call events
+        if event == "StartApp" and call_status == "in-progress":
+            print(f"🔥 Call started - UUID: {call_uuid}")
+
+        elif call_status == "completed" or call_status == "failed":
+            print(f"📞 Call ended - UUID: {call_uuid}, Status: {call_status}")
+            # Clean up stored UUID
+            if p_index in call_uuid_storage:
+                del call_uuid_storage[p_index]
+            if current_call_uuid == call_uuid:
+                current_call_uuid = None
+
+        # Return XML response for Plivo
+        xml_data = f'''<?xml version="1.0" encoding="UTF-8"?>
+        <Response>
+            <Stream streamTimeout="86400" keepCallAlive="true" bidirectional="true" contentType="audio/x-mulaw;rate=8000" audioTrack="inbound" >
+                {settings.HOST_URL}/media-stream
+            </Stream>
+        </Response>
+        '''
+        return HTMLResponse(content=xml_data, media_type="application/xml")
 
 
-@app.api_route("/incoming-call", methods=["GET", "POST"])
-async def handle_incoming_call(request: Request):
-    """Handle incoming call and return TwiML response to connect to Media Stream."""
-    form_data = await request.form()
-    caller_phone = form_data.get("From", "unknown")
-
-    request.state.caller_phone = caller_phone
-
-    wss_host = settings.HOST_URL
-    http_host = wss_host.replace('wss://', 'https://')
-
-    response = plivoxml.ResponseElement()
-
-    get_input = plivoxml.GetInputElement() \
-        .set_action(f"{http_host}/voice") \
-        .set_method("POST") \
-        .set_input_type("dtmf") \
-        .set_redirect(True) \
-        .set_language("en-US") \
-        .set_num_digits(1)
-
-    get_input.add_speak(
-        content="To switch to Hindi, please press 5. To continue in English, press any other key.",
-        voice="Polly.Salli",
-        language="en-US"
-    )
-
-    response.add(get_input)
-
-    response.add_speak(
-        content="No selection received. Continuing in English.",
-        voice="Polly.Salli",
-        language="en-US"
-    )
-
-    return HTMLResponse('<?xml version="1.0" encoding="UTF-8"?>\n' + response.to_string(), media_type="application/xml")
+@app.get("/status")
+async def get_status():
+    """Get current system status"""
+    return {
+        "total_records": len(records),
+        "current_p_index": p_index,
+        "calls_made": len(called_numbers),
+        "call_in_progress": call_in_progress,
+        "next_record": records[p_index] if p_index < len(records) else "All records processed",
+        "remaining_records": max(0, len(records) - p_index),
+        "next_check_in": "60 seconds"
+    }
 
 
 @app.get("/api/recent-calls")
@@ -1215,21 +1082,24 @@ async def get_call_transcripts(call_id: str):
 
 @app.websocket("/media-stream")
 async def handle_media_stream(websocket: WebSocket):
-    """Handle WebSocket connections between Plivo and OpenAI."""
+    """Handle WebSocket connections between Twilio and OpenAI."""
     global conversation_transcript, current_call_session, call_start_time, call_outcome_detected
 
     await websocket.accept()
 
+    # Initialize call tracking
     call_start_time = time.time()
     call_outcome_detected = False
     conversation_transcript = []
 
+    # Create new call session in MongoDB
     patient_record = records[p_index] if p_index < len(records) else {"name": "Unknown", "phone_number": "Unknown"}
     current_call_session = await db_service.create_call_session(
         patient_name=patient_record.get("name", "Unknown"),
         patient_phone=patient_record.get("phone_number", "Unknown")
     )
 
+    # Broadcast call started status
     await websocket_manager.broadcast_call_status(
         call_id=current_call_session.call_id,
         status="started",
@@ -1241,11 +1111,15 @@ async def handle_media_stream(websocket: WebSocket):
     async with websockets.connect(
             OPENAI_API_ENDPOINT,
             extra_headers={"api-key": OPENAI_API_KEY},
-            ping_timeout=20,
-            close_timeout=10
+            ping_timeout=30,
+            close_timeout=15
     ) as realtime_ai_ws:
+
+        # START THE CALL TIMER HERE
+        call_timer_task = asyncio.create_task(start_call_timer(websocket, realtime_ai_ws))
         await initialize_session(realtime_ai_ws, user_details)
 
+        # Connection specific state
         stream_sid = None
         latest_media_timestamp = 0
         last_assistant_item = None
@@ -1277,18 +1151,26 @@ async def handle_media_stream(websocket: WebSocket):
                             mark_queue.pop(0)
             except WebSocketDisconnect:
                 print("Client disconnected.")
+            finally:
                 if realtime_ai_ws.open:
                     await realtime_ai_ws.close()
 
-                print("🔄 Processing call end outcome...")
+                # Process call outcome
                 handle_call_end()
 
+                # End call session in MongoDB
                 if current_call_session:
                     await db_service.end_call_session(current_call_session.call_id)
                     await websocket_manager.broadcast_call_status(
                         call_id=current_call_session.call_id,
                         status="ended"
                     )
+
+                # IMPORTANT: Reset call_in_progress and increment p_index
+                global call_in_progress, p_index
+                call_in_progress = False
+                p_index += 1
+                print(f"📈 Call disconnected. Moving to next record. p_index now: {p_index}")
 
         async def send_to_twilio():
             """Receive events from the OpenAI Realtime API, send audio back to Twilio."""
@@ -1306,6 +1188,7 @@ async def handle_media_stream(websocket: WebSocket):
                                 print(f"User said: {user_transcript}")
                                 conversation_transcript.append(user_transcript)
 
+                                # Store user transcript in MongoDB and broadcast
                                 if current_call_session:
                                     await db_service.save_transcript(
                                         call_id=current_call_session.call_id,
@@ -1313,16 +1196,25 @@ async def handle_media_stream(websocket: WebSocket):
                                         message=user_transcript
                                     )
 
+                                    # Broadcast to WebSocket clients
                                     await websocket_manager.broadcast_transcript(
                                         call_id=current_call_session.call_id,
                                         speaker="user",
                                         message=user_transcript,
                                         timestamp=datetime.utcnow().isoformat()
                                     )
+
+                                # Check for termination conditions
+                                should_terminate, termination_reason = should_terminate_call(user_transcript)
+                                if should_terminate:
+                                    print(f"🔚 Termination triggered: {termination_reason}")
+                                    await terminate_call_gracefully(websocket, realtime_ai_ws, termination_reason)
+                                    return  # Exit the function to stop processing
+
                         except Exception as e:
                             print(f"Error processing user transcript: {e}")
 
-                    # Handle AI response transcription with auto-hangup logic
+                    # Handle AI response transcription
                     elif response['type'] in LOG_EVENT_TYPES:
                         try:
                             transcript = response['response']['output'][0]['content'][0]['transcript']
@@ -1330,6 +1222,7 @@ async def handle_media_stream(websocket: WebSocket):
 
                             conversation_transcript.append(transcript)
 
+                            # Store AI response in MongoDB and broadcast
                             if current_call_session:
                                 await db_service.save_transcript(
                                     call_id=current_call_session.call_id,
@@ -1337,6 +1230,7 @@ async def handle_media_stream(websocket: WebSocket):
                                     message=transcript
                                 )
 
+                                # Broadcast to WebSocket clients
                                 await websocket_manager.broadcast_transcript(
                                     call_id=current_call_session.call_id,
                                     speaker="ai",
@@ -1344,44 +1238,38 @@ async def handle_media_stream(websocket: WebSocket):
                                     timestamp=datetime.utcnow().isoformat()
                                 )
 
-                            # Enhanced trigger detection with auto-hangup
-                            reschedule_triggers = [
-                                'बिल्कुल समझ सकती हूँ',
-                                'कोई बात नहीं',
-                                'आप बताइए कि कब',
-                                'मैं आपको.*कॉल करूंगी',
-                                'बाद में मिलते हैं',
-                                'कब कॉल करना ठीक',
-                                'कोई खास दिन सूट करता',
-                                'समय के बारे में',
-                            ]
-
-                            # Check for not interested triggers
-                            not_interested_triggers = [
-                                'कोई बात नहीं.*उपलब्ध हैं.*धन्यवाद',
-                                'जब भी.*तैयार महसूस.*धन्यवाद',
-                                'धन्यवाद.*अच्छा दिन हो',
-                                'ठीक है.*धन्यवाद.*अच्छा दिन',
-                                'समझ गई.*धन्यवाद.*अच्छा दिन',
-                            ]
-
                             # Check for appointment confirmation triggers
                             appointment_triggers = [
+                                'slot book कर लिया',
                                 'बुक कर दिया है',
                                 'अपॉइंटमेंट.*बुक.*है',
                                 'आपका अपॉइंटमेंट.*फिक्स',
                                 'तो मैंने.*बुक कर दिया',
+                                'शानदार.*बुक कर दिया'
                             ]
 
-                            if any(re.search(trigger, transcript) for trigger in appointment_triggers):
+                            # Check for reschedule triggers
+                            reschedule_triggers = [
+                                'बिल्कुल समझ सकती हूँ',
+                                'कोई बात नहीं',
+                                'आप बताइए कि कब',
+                                'tentative slot hold कर लेती हूँ',
+                                'partner से पूछना है'
+                            ]
+
+                            if any(re.search(trigger, transcript, re.IGNORECASE) for trigger in appointment_triggers):
                                 print(f"✅ APPOINTMENT trigger detected: {transcript}")
-                                process_conversation_outcome(current_ai_response=transcript)
-                            elif any(re.search(trigger, transcript) for trigger in reschedule_triggers):
+                                await process_conversation_outcome()
+                            elif any(re.search(trigger, transcript, re.IGNORECASE) for trigger in reschedule_triggers):
                                 print(f"🔄 RESCHEDULE trigger detected: {transcript}")
-                                process_conversation_outcome(current_ai_response=transcript)
-                            elif any(re.search(trigger, transcript) for trigger in not_interested_triggers):
-                                print(f"❌ NOT INTERESTED trigger detected: {transcript}")
-                                process_conversation_outcome(current_ai_response=transcript)
+                                await process_conversation_outcome()
+
+                            # Check for termination conditions
+                            should_terminate, termination_reason = should_terminate_call(transcript)
+                            if should_terminate:
+                                print(f"🔚 Termination triggered: {termination_reason}")
+                                await terminate_call_gracefully(websocket, realtime_ai_ws, termination_reason)
+                                return  # Exit the function to stop processing
 
                         except (KeyError, IndexError):
                             print("No transcript found in response")
@@ -1404,6 +1292,7 @@ async def handle_media_stream(websocket: WebSocket):
                             if SHOW_TIMING_MATH:
                                 print(f"Setting start timestamp for new response: {response_start_timestamp_twilio}ms")
 
+                        # Update last_assistant_item safely
                         if response.get('item_id'):
                             last_assistant_item = response['item_id']
 
@@ -1420,6 +1309,7 @@ async def handle_media_stream(websocket: WebSocket):
 
             except Exception as e:
                 print(f"Error in send_to_twilio: {e}")
+                call_in_progress = False
 
         async def handle_speech_started_event():
             """Handle interruption when the caller's speech starts."""
@@ -1469,6 +1359,7 @@ async def send_initial_conversation_item(realtime_ai_ws, user_details=None):
     """Send initial conversation item if AI talks first with personalized greeting."""
     greeting_name = user_details.get("FirstName", "there") if user_details else "there"
 
+    # Directly send the greeting message (not instructions for the AI to generate one)
     initial_conversation_item = {
         "type": "conversation.item.create",
         "item": {
@@ -1497,55 +1388,75 @@ async def initialize_session(realtime_ai_ws, user_details=None):
             "input_audio_format": "g711_ulaw",
             "output_audio_format": "g711_ulaw",
             "voice": VOICE,
-            "instructions": f'''AI ROLE: Female voice receptionist from Aveya IVF, Rajouri Garden
-LANGUAGE: Hindi (देवनागरी लिपि)
-VOICE STYLE: Calm, friendly, trustworthy, emotionally intelligent, feminine
-GENDER CONSISTENCY: Use feminine forms (e.g., "बोल रही हूँ", "कर सकती हूँ", "समझ सकती हूँ")
-GOAL: Invite the user for a free fertility clarity consultation and handle their responses accordingly
-you are talking to {records[p_index]['name']}, a {records[p_index]['age']} years old {records[p_index]['gender']}.
+            # Updated AI Instructions
+            "instructions": f'''AI ROLE: Female fertility counselor "Ritika" from Aveya IVF – Rajouri Garden
+SCRIPT: Devanagari for Hindi, English for English words.
+LANGUAGE: Use a natural mix of Hindi and English — speak in conversational Hinglish (60% Hindi + 40% English).
+VOICE STYLE: शांत, इंसान-जैसा, हेल्पफुल और धीरे-धीरे अपॉइंटमेंट की ओर गाइड करने वाला
+STYLE: Use simple Hindi with natural English words where commonly used in daily speech. Empathetic, professional, and supportive.
+
+You are talking to {records[p_index]['name']}, a {records[p_index]['age']} years old {records[p_index]['gender']}.
+
+विशेष निर्देश: बातचीत का फ्लो बाधित न हो
+- हर स्टेप तभी आगे बढ़ाएँ जब यूज़र ने पिछले सवाल का जवाब दे दिया हो
+- अगर कॉल कटे या यूज़र का जवाब अधूरा हो, तो उसी पॉइंट से दोबारा शुरू करें
+- कभी भी अगले सवाल पर न जाएँ जब तक कि पिछली बात पूरी न हो जाए
 
 CONVERSATION FLOW:
-"नमस्ते {records[p_index]['name']}, मैं Aveya IVF, से Rekha बोल रही हूँ। कैसे हैं आप आज?"
 
-(रुकें, उत्तर सुनें)
+OPENING:
+"नमस्ते {records[p_index]['name']}, मैं Ritika बोल रही हूँ Aveya IVF – Rajouri Garden से। आप कैसे हैं आज?"
+(रुकें, जवाब का इंतज़ार करें और जवाब acknowledge करें)
+"अच्छा सुनकर अच्छा लगा "
+"हमें हाल ही में एक फॉर्म मिला था – जिसमें fertility को लेकर थोड़ी clarity माँगी गई थी। शायद आपने या आपके किसी family member ने भरा हो। क्या आपको थोड़ा याद आ रहा है?"
 
-"मैं आपसे यह पूछने के लिए कॉल कर रही हूँ कि क्या आप एक फ्री फर्टिलिटी क्लैरिटी कंसल्टेशन के लिए अपॉइंटमेंट लेना चाहेंगे?"
+DISCOVERY:
+"हमारे पास कई couples आते हैं जो actively try कर रहे होते हैं या बस explore कर रहे होते हैं कि next step क्या हो सकता है।"
+- "क्या आप लोग actively try कर रहे हैं या सिर्फ options explore कर रहे हैं?"
+- "क्या आपने पहले किसी doctor से consult किया है?"
+- "IVF के बारे में सोच रहे हैं या natural conceive को लेकर clarity चाहिए?"
 
-IF USER SAYS YES / INTERESTED:
-"बहुत बढ़िया! मैं आपको आने वाले कुछ दिनों की तारीखें बताती हूँ —"
-"क्या आप कल, परसों, या अगले हफ्ते को आना पसंद करेंगे?"
-(रुकें, तारीख चुनने दें)
-"और उस दिन आपको कौन-सा समय ठीक लगेगा — सुबह, दोपहर या शाम?"
-(रुकें, समय चुनने दें)
-"शानदार! तो मैंने आपका अपॉइंटमेंट {(datetime.today() + timedelta(days=1)).strftime("%d-%m-%Y")} को सुबह के लिए बुक कर दिया है। धन्यवाद और अच्छा दिन हो!"
+EMOTIONAL CONNECTION:
+"देखिए, ये journey थोड़ी confusing हो सकती है — और बिल्कुल normal है ऐसा feel करना।"
+"हमारा मकसद बस ये है कि आप एक peaceful clarity session ले सकें – बिना किसी pressure के।"
 
-IF USER WANTS TO RESCHEDULE (बाद में कॉल, अभी नहीं, व्यस्त, etc.):
-"बिल्कुल समझ सकती हूँ। कोई बात नहीं। आप बताइए कि आपको कब कॉल करना ठीक लगेगा?"
-(Wait for their response about preferred time)
+OFFER EXPLANATION:
+"इस हफ्ते 1000 रुपये वाली clarity consultation पूरी तरह free रखी गई है – ताकि couples सही guidance ले सकें।"
+"ये personal session होता है – जहाँ doctor आपके case को ध्यान से समझते हैं और आपके doubts clear करते हैं। कोई obligation नहीं है।"
 
-Then ask specific details:
-"क्या आपको कोई खास दिन सूट करता है? जैसे सोमवार, मंगलवार?"
-(Wait for day preference)
+SLOT SUGGESTION:
+"अगर आपको लगे कि ये session helpful हो सकता है, तो मैं एक छोटा सा slot block कर देती हूँ।"
+"आपके लिए कौन सा day ज़्यादा convenient रहेगा – Monday से Saturday के बीच?"
+(जवाब सुनें और acknowledge करें)
+"Perfect! और उस दिन कौन सा time better रहेगा – morning, afternoon या evening?"
 
-"और समय के बारे में? आपको सुबह, दोपहर या शाम में कब बात करना ठीक लगेगा?"
-(Wait for time preference)
+BOOKING CONFIRMATION:
+"तो ठीक है, मैं आपके लिए [day] [time] का slot reserve कर रही हूँ।"
+"Great! तो मैंने doctor के calendar में [Day + Time] का slot book कर लिया है – सिर्फ आपके लिए।"
+"बस एक छोटी request – अगर किसी reason से आप नहीं आ पाएं, तो please एक WhatsApp message कर दीजिए।"
 
-"ठीक है, मैं आपको सोमवार शाम पर कॉल करूंगी। धन्यवाद और बाद में मिलते हैं!"
+ENDING:
+"मैं अभी आपको सारी details और clinic का location WhatsApp पर भेज रही हूँ।"
+"अगर consult से पहले कोई भी doubt हो – तो बेहिचक message करिए।"
 
-IF USER SAYS NO / NOT INTERESTED (नहीं चाहिए, interested नहीं, जरूरत नहीं, etc.):
-"कोई बात नहीं — जब भी आप तैयार महसूस करें, हम हमेशा उपलब्ध हैं। धन्यवाद और अच्छा दिन हो!"
+FAREWELL (Use ONLY these phrases for ending):
+"मैं हमेशा आपकी help के लिए available हूँ। आपका दिन शुभ हो।"
+"धन्यवाद! आपका दिन मंगलमय हो।"
+"अलविदा, आपका दिन अच्छा हो।"
+"Take care! आपका दिन शुभ हो।"
 
-IF USER IS RUDE / WANTS TO END CALL (परेशान मत करो, फोन मत करो, etc.):
-"समझ गई। मैं आपको आगे परेशान नहीं करूंगी। धन्यवाद और अच्छा दिन हो!"
+OBJECTION HANDLING:
+- "मुझे याद नहीं कौन ने भरा" → "No worries — ये form अकसर family में कोई और भी भर देता है। बस एक clarity call होता है।"
+- "Partner से पूछना है" → "Bilkul — मैं tentative slot hold कर लेती हूँ, आप दोनों मिलकर decide कर लीजिए।"
+- "अभी ready नहीं हैं" → "Totally understand — इसलिए ही तो ये सिर्फ clarity के लिए है, commitment के लिए नहीं।"
 
-IMPORTANT: 
-1. Always use the exact phrases "बिल्कुल समझ सकती हूँ" and "कोई बात नहीं" when user wants to reschedule.
-2. For reschedule requests, ALWAYS ask for specific callback preferences (day + time period).
-3. For not interested users, always end with "धन्यवाद और अच्छा दिन हो!" to signal call completion.
-4. After successfully booking appointment, confirming reschedule WITH specific time, or handling not interested users, end with appropriate closing phrases to signal call completion.
-5. Keep responses natural and conversational while following the flow.
-6. Be respectful and polite even if the user is not interested or rude.
-7. When user wants reschedule, don't just accept "बाद में" - ask for specific day and time preferences.''',
+IMPORTANT BEHAVIOR:
+- हर सवाल का जवाब आने तक उसी टॉपिक पर टिके रहें
+- किसी नए टॉपिक पर तभी जाएँ जब पिछली बात पूरी हो
+- Confusion को normalize करें, clarity को gently push करें
+- बातचीत को हमेशा open-ended और भरोसेमंद बनाएं
+- Objections पर softly reframe करें
+- अपॉइंटमेंट को अवसर की तरह बताएं, ज़ोर न डालें''',
             "modalities": ["text", "audio"],
             "temperature": 0.8,
         }
@@ -1553,16 +1464,47 @@ IMPORTANT:
     print('Sending session update:', json.dumps(session_update))
     await realtime_ai_ws.send(json.dumps(session_update))
 
+    # Uncomment the next line to have the AI speak first
     await send_initial_conversation_item(realtime_ai_ws, user_details)
+
+
+@app.post("/hangup")
+async def hangup_endpoint(request: Request):
+    """Endpoint to handle call hangup requests"""
+    try:
+        data = await request.json()
+        call_id = data.get("call_id")
+        reason = data.get("reason", "unknown")
+
+        logger.info(f"Hangup request received for call {call_id}, reason: {reason}")
+
+        return JSONResponse({
+            "status": "success",
+            "message": f"Hangup request processed for call {call_id}",
+            "timestamp": datetime.utcnow().isoformat()
+        })
+
+    except Exception as e:
+        logger.error(f"Error processing hangup request: {e}")
+        return JSONResponse({
+            "status": "error",
+            "message": "Invalid request"
+        }, status_code=400)
 
 
 @app.on_event("startup")
 async def startup_event():
     """Initialize database connection on startup"""
+    global last_processed_count
+    # Database connection
     connected = await db_service.connect()
     if not connected:
         raise RuntimeError("Failed to connect to MongoDB")
     print("✅ Application started with MongoDB connection")
+
+    # Start background checker
+    start_background_thread()
+    print("🔄 Auto-call monitoring started")
 
 
 @app.on_event("shutdown")
@@ -1571,22 +1513,11 @@ async def shutdown_event():
     await db_service.disconnect()
 
 
-read_hospital_records("Hospital_Records.xlsx")
-
-
 def main():
-    global current_plivo_call_uuid
-    call_response = plivo_client.calls.create(
-        from_=settings.PLIVO_FROM_NUMBER,
-        to_=records[p_index]['phone_number'],
-        answer_url=settings.PLIVO_ANSWER_XML,
-        answer_method='GET')
-
-    current_plivo_call_uuid = call_response.request_uuid
-    print(f"Initial call made with UUID: {current_plivo_call_uuid}")
-
+    print("Starting auto-call server...")
     uvicorn.run(app, host="0.0.0.0", port=settings.PORT)
 
 
 if __name__ == "__main__":
+    start_background_thread()
     main()
