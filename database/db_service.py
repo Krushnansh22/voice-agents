@@ -10,7 +10,7 @@ from .models import (
     call_session_to_dict, transcript_entry_to_dict,
     dict_to_call_session, dict_to_transcript_entry
 )
-from V2.settings import settings
+from settings import settings
 
 logger = logging.getLogger(__name__)
 
