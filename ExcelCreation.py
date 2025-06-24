@@ -4,7 +4,7 @@ from datetime import datetime, timedelta
 
 wb = openpyxl.Workbook()
 ws = wb.active
-ws.title = "Hospital Records"
+ws.title = "Hospital_Records"
 
 # Define headers
 headers = [
@@ -22,11 +22,10 @@ for col_num, header in enumerate(headers, start=1):
 
 ##CHNAGE PHONE NUMBER HERE and run
 sample_data = [
-    ["Aarav Mehta", "+919049865451", "24 MG Road, Bengaluru", 28, "Male"],
-    ["Priya Sharma", "+9198459130897", "87 Lajpat Nagar, Delhi", 32, "Female"],
-    ["Rohan Verma", "+919049865451", "12 Park Street, Kolkata", 45, "Male"],
-    ["Sneha Iyer", "+919049865451", "98 Anna Salai, Chennai", 29, "Female"],
-    ["Vikram Patil", "+919049865451", "53 JM Road, Pune", 39, "Male"]
+    ["Aarav Mehta", "+918459673277", "24 MG Road, Bengaluru", 28, "Male"],
+    ["Vanshika panjwani", "+919049865451", "24 MG Road, Bengaluru", 28, "Male"],
+    ["Vanshika panjwani", "+919049865451", "24 MG Road, Bengaluru", 28, "Male"],
+     ["Vanshika panjwani", "+919049865451", "24 MG Road, Bengaluru", 28, "Male"],
 ]
 
 # Insert each row into the worksheet
@@ -45,7 +44,7 @@ for column in ws.columns:
 
 # Save the workbook
 wb.save("Hospital_Records.xlsx")
-print("Excel sheet 'Hospital_Records.xlsx' created successfully with 5 sample rows.")
+print(f"Excel sheet 'Hospital_Records.xlsx' created successfully with {row_num} sample rows.")
 
 ## Un-comment and run below code for "Appointment_Details.xlsx"
 

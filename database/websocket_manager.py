@@ -1,5 +1,3 @@
-# Create or update your websocket_manager.py file
-
 import json
 import asyncio
 from typing import List
