@@ -1115,6 +1115,7 @@ async def get_status():
     }
 
 
+
 @app.get("/api/recent-calls")
 async def get_recent_calls():
     """Get recent call sessions"""
