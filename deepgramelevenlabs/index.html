@@ -1,0 +1,1186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebSocket Voice Assistant - Simplified</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+
+        .container {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 40px;
+            max-width: 900px;
+            width: 100%;
+            box-shadow: 0 8px 32px rgba(31, 38, 135, 0.37);
+            border: 1px solid rgba(255, 255, 255, 0.18);
+        }
+
+        h1 {
+            text-align: center;
+            color: white;
+            margin-bottom: 30px;
+            font-size: 2.5rem;
+            font-weight: 300;
+        }
+
+        .connection-status {
+            text-align: center;
+            margin-bottom: 20px;
+            padding: 10px;
+            border-radius: 10px;
+            font-weight: bold;
+        }
+
+        .connection-status.connected {
+            background: rgba(46, 204, 113, 0.3);
+            color: #2ecc71;
+        }
+
+        .connection-status.disconnected {
+            background: rgba(231, 76, 60, 0.3);
+            color: #e74c3c;
+        }
+
+        .connection-status.connecting {
+            background: rgba(241, 196, 15, 0.3);
+            color: #f1c40f;
+        }
+
+        .session-controls {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 15px;
+            padding: 20px;
+            margin-bottom: 20px;
+            text-align: center;
+        }
+
+        .session-status {
+            color: white;
+            margin-bottom: 15px;
+            font-size: 1.1rem;
+        }
+
+        .session-info {
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 10px;
+            padding: 15px;
+            margin-bottom: 15px;
+            color: #ffd93d;
+            font-family: monospace;
+            font-size: 12px;
+            display: none;
+        }
+
+        .controls {
+            display: flex;
+            flex-direction: column;
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .control-group {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 15px;
+            padding: 20px;
+        }
+
+        .control-group h3 {
+            color: white;
+            margin-bottom: 15px;
+            font-size: 1.2rem;
+        }
+
+        .file-input-wrapper {
+            position: relative;
+            display: inline-block;
+            margin-bottom: 15px;
+        }
+
+        .file-input {
+            display: none;
+        }
+
+        .file-input-label {
+            display: inline-block;
+            padding: 12px 25px;
+            background: rgba(255, 255, 255, 0.2);
+            color: white;
+            border-radius: 25px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            border: 2px solid rgba(255, 255, 255, 0.3);
+        }
+
+        .file-input-label:hover {
+            background: rgba(255, 255, 255, 0.3);
+            transform: translateY(-2px);
+        }
+
+        .btn {
+            background: linear-gradient(45deg, #ff6b6b, #ffd93d);
+            color: white;
+            border: none;
+            padding: 12px 30px;
+            border-radius: 25px;
+            font-size: 14px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin: 5px;
+        }
+
+        .btn:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+        }
+
+        .btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
+        .btn.primary {
+            background: linear-gradient(45deg, #4ecdc4, #44a08d);
+        }
+
+        .btn.danger {
+            background: linear-gradient(45deg, #ff6b6b, #ee5a52);
+        }
+
+        .btn.record-btn {
+            background: #ff4757;
+            border-radius: 50%;
+            width: 70px;
+            height: 70px;
+            font-size: 24px;
+            margin: 0 auto;
+            display: block;
+        }
+
+        .btn.record-btn.recording {
+            background: #ff3838;
+            animation: pulse 1s infinite;
+        }
+
+        @keyframes pulse {
+            0% { transform: scale(1); }
+            50% { transform: scale(1.1); }
+            100% { transform: scale(1); }
+        }
+
+        .text-input {
+            width: 100%;
+            padding: 15px;
+            border: 2px solid rgba(255, 255, 255, 0.3);
+            border-radius: 10px;
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+            font-size: 16px;
+            margin-bottom: 15px;
+            resize: vertical;
+            min-height: 100px;
+        }
+
+        .text-input::placeholder {
+            color: rgba(255, 255, 255, 0.7);
+        }
+
+        .status-panel {
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 15px;
+            padding: 20px;
+            margin-bottom: 20px;
+            min-height: 100px;
+        }
+
+        .status-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 8px 0;
+            color: white;
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+        }
+
+        .status-item:last-child {
+            border-bottom: none;
+        }
+
+        .status-icon {
+            width: 20px;
+            text-align: center;
+        }
+
+        .status-text {
+            flex: 1;
+        }
+
+        .status-time {
+            font-size: 12px;
+            opacity: 0.7;
+        }
+
+        .results {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 15px;
+            padding: 20px;
+            margin-top: 20px;
+            display: none;
+        }
+
+        .result-item {
+            margin-bottom: 20px;
+            color: white;
+        }
+
+        .result-label {
+            font-weight: bold;
+            color: #ffd93d;
+            display: block;
+            margin-bottom: 8px;
+            font-size: 14px;
+        }
+
+        .result-content {
+            background: rgba(0, 0, 0, 0.3);
+            padding: 15px;
+            border-radius: 10px;
+            word-wrap: break-word;
+            line-height: 1.5;
+        }
+
+        audio {
+            width: 100%;
+            margin-top: 10px;
+        }
+
+        .filename {
+            color: #ffd93d;
+            font-size: 12px;
+            margin-top: 8px;
+            word-break: break-all;
+        }
+
+        .history-panel {
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 15px;
+            padding: 20px;
+            margin-top: 20px;
+            max-height: 400px;
+            overflow-y: auto;
+            display: none;
+        }
+
+        .history-item {
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 10px;
+            padding: 15px;
+            margin-bottom: 15px;
+            color: white;
+        }
+
+        .history-item:last-child {
+            margin-bottom: 0;
+        }
+
+        .history-meta {
+            font-size: 12px;
+            color: #ffd93d;
+            margin-bottom: 10px;
+        }
+
+        .history-transcript {
+            margin-bottom: 10px;
+            padding: 10px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 5px;
+            border-left: 3px solid #4ecdc4;
+        }
+
+        .history-response {
+            padding: 10px;
+            background: rgba(255, 255, 255, 0.1);
+            border-radius: 5px;
+            border-left: 3px solid #ffd93d;
+        }
+
+        .tabs {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+
+        .tab {
+            padding: 10px 20px;
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+            border: none;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+
+        .tab.active {
+            background: rgba(255, 255, 255, 0.3);
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎤 Voice Assistant - Simplified</h1>
+
+        <!-- Connection Status -->
+        <div id="connectionStatus" class="connection-status disconnected">
+            🔴 Disconnected
+        </div>
+
+        <!-- Session Controls -->
+        <div class="session-controls">
+            <div id="sessionStatus" class="session-status">No active session</div>
+            <div id="sessionInfo" class="session-info"></div>
+            <div>
+                <button id="startSessionBtn" class="btn primary" disabled>🚀 Start New Session</button>
+                <button id="endSessionBtn" class="btn danger" disabled>🛑 End Session</button>
+                <button id="historyBtn" class="btn" disabled>📋 View My History</button>
+                <button id="allUsersBtn" class="btn">👥 View All Users</button>
+                <button id="statsBtn" class="btn">📊 System Stats</button>
+            </div>
+        </div>
+
+        <!-- Tab Navigation -->
+        <div class="tabs">
+            <button class="tab active" onclick="switchTab('controls')">🎛️ Controls</button>
+            <button class="tab" onclick="switchTab('history')">📋 History</button>
+        </div>
+
+        <!-- Controls Tab -->
+        <div id="controlsTab" class="tab-content active">
+            <div class="controls">
+                <!-- Voice Recording (Main Feature) -->
+                <div class="control-group">
+                    <h3>🎙️ Voice Recording</h3>
+                    <button id="recordBtn" class="btn record-btn" disabled>🎙️</button>
+                    <div style="text-align: center; color: white; margin-top: 10px;" id="recordStatus">
+                        Start a session to enable recording
+                    </div>
+                </div>
+            </div>
+
+            <!-- Results (Moved up) -->
+            <div class="results" id="results">
+                <div class="result-item">
+                    <span class="result-label">📝 TRANSCRIPT</span>
+                    <div class="result-content" id="transcript"></div>
+                </div>
+                <div class="result-item">
+                    <span class="result-label">🤖 AI RESPONSE</span>
+                    <div class="result-content" id="aiResponse"></div>
+                </div>
+                <div class="result-item">
+                    <span class="result-label">🔊 GENERATED AUDIO</span>
+                    <audio id="responseAudio" controls></audio>
+                </div>
+            </div>
+
+            <!-- Status Panel -->
+            <div class="status-panel">
+                <h3 style="color: white; margin-bottom: 15px;">📊 Status</h3>
+                <div id="statusList">
+                    <div class="status-item">
+                        <span class="status-icon">ℹ️</span>
+                        <span class="status-text">Ready to connect...</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Additional Options (Moved to bottom) -->
+            <div class="controls">
+                <h3 style="color: white; margin-bottom: 15px; text-align: center;">⚙️ Additional Options</h3>
+
+                <!-- File Upload -->
+                <div class="control-group">
+                    <h3>📁 Upload Audio File</h3>
+                    <div class="file-input-wrapper">
+                        <input type="file" id="audioFile" class="file-input" accept="audio/*">
+                        <label for="audioFile" class="file-input-label">Choose Audio File</label>
+                    </div>
+                    <div class="filename" id="fileName"></div>
+                    <button id="uploadBtn" class="btn" disabled>🚀 Process Audio</button>
+                </div>
+
+                <!-- Text to Speech -->
+                <div class="control-group">
+                    <h3>📝 Text to Speech</h3>
+                    <textarea id="textInput" class="text-input" placeholder="Enter text to convert to speech..."></textarea>
+                    <button id="ttsBtn" class="btn" disabled>🔊 Generate Speech</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- History Tab -->
+        <div id="historyTab" class="tab-content">
+            <div class="history-panel" id="historyPanel" style="display: block;">
+                <h3 style="color: white; margin-bottom: 15px;">📋 History & Users</h3>
+                <div id="historyList">
+                    <div style="color: white; text-align: center; padding: 40px;">
+                        No data yet. Start a session or view all users!
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        class VoiceAssistantWebSocket {
+            constructor() {
+                this.ws = null;
+                this.clientId = this.generateClientId();
+                this.isRecording = false;
+                this.mediaRecorder = null;
+                this.recordedChunks = [];
+                this.currentUser = null;
+
+                this.initializeElements();
+                this.setupEventListeners();
+                this.connect();
+            }
+
+            generateClientId() {
+                return 'client_' + Date.now() + '_' + Math.random().toString(36).substring(2, 15);
+            }
+
+            initializeElements() {
+                this.elements = {
+                    connectionStatus: document.getElementById('connectionStatus'),
+                    sessionStatus: document.getElementById('sessionStatus'),
+                    sessionInfo: document.getElementById('sessionInfo'),
+                    startSessionBtn: document.getElementById('startSessionBtn'),
+                    endSessionBtn: document.getElementById('endSessionBtn'),
+                    historyBtn: document.getElementById('historyBtn'),
+                    allUsersBtn: document.getElementById('allUsersBtn'),
+                    statsBtn: document.getElementById('statsBtn'),
+                    statusList: document.getElementById('statusList'),
+                    audioFile: document.getElementById('audioFile'),
+                    fileName: document.getElementById('fileName'),
+                    uploadBtn: document.getElementById('uploadBtn'),
+                    recordBtn: document.getElementById('recordBtn'),
+                    recordStatus: document.getElementById('recordStatus'),
+                    textInput: document.getElementById('textInput'),
+                    ttsBtn: document.getElementById('ttsBtn'),
+                    results: document.getElementById('results'),
+                    transcript: document.getElementById('transcript'),
+                    aiResponse: document.getElementById('aiResponse'),
+                    responseAudio: document.getElementById('responseAudio'),
+                    historyList: document.getElementById('historyList')
+                };
+            }
+
+            setupEventListeners() {
+                // Session controls
+                this.elements.startSessionBtn.addEventListener('click', () => {
+                    this.startSession();
+                });
+
+                this.elements.endSessionBtn.addEventListener('click', () => {
+                    this.endSession();
+                });
+
+                this.elements.historyBtn.addEventListener('click', () => {
+                    this.getUserHistory();
+                });
+
+                this.elements.allUsersBtn.addEventListener('click', () => {
+                    this.getAllUsers();
+                });
+
+                this.elements.statsBtn.addEventListener('click', () => {
+                    this.getSystemStats();
+                });
+
+                // File upload
+                this.elements.audioFile.addEventListener('change', (e) => {
+                    const file = e.target.files[0];
+                    if (file) {
+                        this.elements.fileName.textContent = `Selected: ${file.name}`;
+                        this.elements.uploadBtn.disabled = !this.currentUser;
+                    }
+                });
+
+                this.elements.uploadBtn.addEventListener('click', () => {
+                    this.uploadAudioFile();
+                });
+
+                // Recording
+                this.elements.recordBtn.addEventListener('click', () => {
+                    if (this.isRecording) {
+                        this.stopRecording();
+                    } else {
+                        this.startRecording();
+                    }
+                });
+
+                // Text to Speech
+                this.elements.textInput.addEventListener('input', (e) => {
+                    this.elements.ttsBtn.disabled = !e.target.value.trim() || !this.currentUser;
+                });
+
+                this.elements.ttsBtn.addEventListener('click', () => {
+                    this.textToSpeech();
+                });
+            }
+
+            connect() {
+                const wsUrl = `ws://localhost:8000/ws/${this.clientId}`;
+                this.updateConnectionStatus('connecting', '🟡 Connecting...');
+
+                try {
+                    this.ws = new WebSocket(wsUrl);
+
+                    this.ws.onopen = () => {
+                        this.updateConnectionStatus('connected', '🟢 Connected');
+                        this.addStatusMessage('✅', 'Connected to server', 'success');
+                        this.elements.startSessionBtn.disabled = false;
+                    };
+
+                    this.ws.onmessage = (event) => {
+                        this.handleMessage(JSON.parse(event.data));
+                    };
+
+                    this.ws.onclose = () => {
+                        this.updateConnectionStatus('disconnected', '🔴 Disconnected');
+                        this.addStatusMessage('❌', 'Disconnected from server', 'error');
+                        this.enableSessionControls(false);
+
+                        // Auto-reconnect after 3 seconds
+                        setTimeout(() => {
+                            if (this.ws.readyState === WebSocket.CLOSED) {
+                                this.connect();
+                            }
+                        }, 3000);
+                    };
+
+                    this.ws.onerror = (error) => {
+                        console.error('WebSocket error:', error);
+                        this.addStatusMessage('⚠️', 'Connection error', 'error');
+                    };
+
+                } catch (error) {
+                    console.error('Failed to connect:', error);
+                    this.updateConnectionStatus('disconnected', '🔴 Connection Failed');
+                }
+            }
+
+            handleMessage(message) {
+                console.log('Received message:', message);
+
+                switch (message.type) {
+                    case 'session_started':
+                        this.handleSessionStarted(message);
+                        break;
+                    case 'session_ended':
+                        this.handleSessionEnded(message);
+                        break;
+                    case 'user_history':
+                        this.handleUserHistory(message);
+                        break;
+                    case 'all_users':
+                        this.handleAllUsers(message);
+                        break;
+                    case 'system_stats':
+                        this.handleSystemStats(message);
+                        break;
+                    case 'status':
+                        this.handleStatusMessage(message);
+                        break;
+                    case 'result':
+                        this.handleResult(message);
+                        break;
+                    case 'error':
+                        this.handleError(message);
+                        break;
+                    case 'pong':
+                        // Handle keepalive
+                        break;
+                }
+            }
+
+            handleSessionStarted(message) {
+                this.currentUser = {
+                    user_id: message.user_id,
+                    status: message.status,
+                    created_at: message.created_at
+                };
+
+                this.updateSessionStatus();
+                this.enableSessionControls(true);
+                this.addStatusMessage('🚀', 'New session started!', 'success');
+                this.addStatusMessage('👤', `User ID: ${message.user_id}`, 'info');
+            }
+
+            handleSessionEnded(message) {
+                this.addStatusMessage('🛑', `Session ended for user: ${message.user_id}`, 'info');
+                this.addStatusMessage('📊', `Total conversations: ${message.total_conversations}`, 'info');
+
+                this.currentUser = null;
+                this.updateSessionStatus();
+                this.enableSessionControls(false);
+            }
+
+            handleUserHistory(message) {
+                this.displayUserHistory(message);
+                switchTab('history');
+            }
+
+            handleAllUsers(message) {
+                this.displayAllUsers(message);
+                switchTab('history');
+            }
+
+            handleSystemStats(message) {
+                this.displaySystemStats(message);
+                switchTab('history');
+            }
+
+            handleStatusMessage(message) {
+                const statusMap = {
+                    'saving_audio': { icon: '💾', text: 'Saving audio file...' },
+                    'transcribing': { icon: '🔤', text: 'Transcribing speech...' },
+                    'transcription_complete': { icon: '✅', text: 'Transcription complete' },
+                    'generating_response': { icon: '🤖', text: 'Generating AI response...' },
+                    'response_generated': { icon: '✅', text: 'AI response generated' },
+                    'generating_speech': { icon: '🔊', text: 'Converting to speech...' },
+                    'saving_conversation': { icon: '💾', text: 'Saving conversation...' },
+                    'completed': { icon: '🎉', text: 'Processing completed!' }
+                };
+
+                const statusInfo = statusMap[message.status] || { icon: 'ℹ️', text: message.status };
+                this.addStatusMessage(statusInfo.icon, statusInfo.text, 'info');
+
+                // Show intermediate results
+                if (message.transcript) {
+                    this.elements.transcript.textContent = message.transcript;
+                    this.elements.results.style.display = 'block';
+                }
+                if (message.ai_response) {
+                    this.elements.aiResponse.textContent = message.ai_response;
+                }
+            }
+
+            handleResult(message) {
+                if (message.transcript) {
+                    this.elements.transcript.textContent = message.transcript;
+                }
+                if (message.ai_response) {
+                    this.elements.aiResponse.textContent = message.ai_response;
+                }
+                if (message.text) {
+                    this.elements.aiResponse.textContent = message.text;
+                }
+                if (message.audio_data) {
+                    const audioBlob = this.base64ToBlob(message.audio_data, 'audio/mpeg');
+                    const audioUrl = URL.createObjectURL(audioBlob);
+                    this.elements.responseAudio.src = audioUrl;
+                }
+
+                this.elements.results.style.display = 'block';
+                this.enableControls(true);
+
+                // Add processing time info
+                if (message.processing_time) {
+                    this.addStatusMessage('⏱️', `Processing time: ${message.processing_time.toFixed(2)}s`, 'info');
+                }
+            }
+
+            handleError(message) {
+                this.addStatusMessage('❌', `Error: ${message.message}`, 'error');
+                this.enableControls(true);
+            }
+
+            startSession() {
+                if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+                    this.addStatusMessage('❌', 'Not connected to server', 'error');
+                    return;
+                }
+
+                this.sendMessage({
+                    type: 'start_session',
+                    metadata: {
+                        user_agent: navigator.userAgent,
+                        timestamp: new Date().toISOString(),
+                        client_info: {
+                            screen_resolution: `${screen.width}x${screen.height}`,
+                            language: navigator.language,
+                            platform: navigator.platform
+                        }
+                    }
+                });
+
+                this.elements.startSessionBtn.disabled = true;
+            }
+
+            endSession() {
+                if (!this.currentUser) {
+                    this.addStatusMessage('❌', 'No active session', 'error');
+                    return;
+                }
+
+                this.sendMessage({
+                    type: 'end_session',
+                    user_id: this.currentUser.user_id
+                });
+
+                this.elements.endSessionBtn.disabled = true;
+            }
+
+            getUserHistory() {
+                if (!this.currentUser) {
+                    this.addStatusMessage('❌', 'No active session', 'error');
+                    return;
+                }
+
+                this.sendMessage({
+                    type: 'get_user_history',
+                    user_id: this.currentUser.user_id,
+                    limit: 50
+                });
+            }
+
+            getAllUsers() {
+                this.sendMessage({
+                    type: 'get_all_users',
+                    limit: 50
+                });
+            }
+
+            getSystemStats() {
+                this.sendMessage({
+                    type: 'get_system_stats'
+                });
+            }
+
+            displayUserHistory(data) {
+                const historyList = this.elements.historyList;
+                historyList.innerHTML = '';
+
+                if (data.conversations.length === 0) {
+                    historyList.innerHTML = `
+                        <div style="color: white; text-align: center; padding: 40px;">
+                            No conversations in this session yet.
+                        </div>
+                    `;
+                    return;
+                }
+
+                // Add user summary at the top
+                const summaryItem = document.createElement('div');
+                summaryItem.className = 'history-item';
+                summaryItem.style.background = 'rgba(255, 215, 0, 0.2)';
+                summaryItem.innerHTML = `
+                    <div style="color: #ffd93d; font-weight: bold; margin-bottom: 10px;">
+                        👤 User Session Summary
+                    </div>
+                    <div style="color: white;">
+                        <strong>User ID:</strong> ${data.user_info.user_id}<br>
+                        <strong>Created:</strong> ${new Date(data.user_info.created_at).toLocaleString()}<br>
+                        <strong>Status:</strong> ${data.user_info.status}<br>
+                        <strong>Total Conversations:</strong> ${data.conversations.length}
+                    </div>
+                `;
+                historyList.appendChild(summaryItem);
+
+                data.conversations.forEach((conv, index) => {
+                    const historyItem = document.createElement('div');
+                    historyItem.className = 'history-item';
+
+                    const timestamp = new Date(conv.timestamp).toLocaleString();
+                    const processingTime = conv.processing_time ? `${conv.processing_time.toFixed(2)}s` : 'N/A';
+
+                    historyItem.innerHTML = `
+                        <div class="history-meta">
+                            #${index + 1} | ${timestamp} | Processing: ${processingTime}
+                        </div>
+                        <div class="history-transcript">
+                            <strong>You:</strong> ${conv.transcript}
+                        </div>
+                        <div class="history-response">
+                            <strong>Assistant:</strong> ${conv.ai_response}
+                        </div>
+                    `;
+
+                    historyList.appendChild(historyItem);
+                });
+            }
+
+            displayAllUsers(data) {
+                const historyList = this.elements.historyList;
+                historyList.innerHTML = '';
+
+                if (data.users.length === 0) {
+                    historyList.innerHTML = `
+                        <div style="color: white; text-align: center; padding: 40px;">
+                            No users found in the database.
+                        </div>
+                    `;
+                    return;
+                }
+
+                // Add header
+                const headerItem = document.createElement('div');
+                headerItem.className = 'history-item';
+                headerItem.style.background = 'rgba(78, 205, 196, 0.3)';
+                headerItem.innerHTML = `
+                    <div style="color: #4ecdc4; font-weight: bold; margin-bottom: 10px;">
+                        👥 All Users (${data.users.length} total)
+                    </div>
+                    <div style="color: white; font-size: 12px;">
+                        Each user represents a unique session with independent conversations.
+                    </div>
+                `;
+                historyList.appendChild(headerItem);
+
+                data.users.forEach((user, index) => {
+                    const userItem = document.createElement('div');
+                    userItem.className = 'history-item';
+
+                    const createdAt = new Date(user.created_at).toLocaleString();
+                    const endedAt = user.ended_at ? new Date(user.ended_at).toLocaleString() : 'Still Active';
+                    const statusColor = user.status === 'active' ? '#2ecc71' : '#95a5a6';
+
+                    userItem.innerHTML = `
+                        <div style="display: flex; justify-content: space-between; margin-bottom: 10px;">
+                            <div style="color: #ffd93d; font-weight: bold;">
+                                User #${index + 1}
+                            </div>
+                            <div style="color: ${statusColor}; font-weight: bold;">
+                                ${user.status.toUpperCase()}
+                            </div>
+                        </div>
+                        <div style="color: white; font-family: monospace; font-size: 11px; margin-bottom: 8px;">
+                            <strong>User ID:</strong> ${user.user_id}
+                        </div>
+                        <div style="color: white; font-size: 12px;">
+                            <strong>Created:</strong> ${createdAt}<br>
+                            <strong>Ended:</strong> ${endedAt}<br>
+                            <strong>Conversations:</strong> ${user.total_conversations}
+                        </div>
+                        <div style="margin-top: 10px;">
+                            <button onclick="viewUserDetails('${user.user_id}')"
+                                    style="background: rgba(78, 205, 196, 0.7); color: white; border: none; padding: 5px 15px; border-radius: 15px; cursor: pointer; font-size: 11px;">
+                                📋 View Conversations
+                            </button>
+                        </div>
+                    `;
+
+                    historyList.appendChild(userItem);
+                });
+            }
+
+            displaySystemStats(data) {
+                const historyList = this.elements.historyList;
+                historyList.innerHTML = '';
+
+                const statsItem = document.createElement('div');
+                statsItem.className = 'history-item';
+                statsItem.style.background = 'rgba(155, 89, 182, 0.3)';
+
+                const stats = data.stats;
+
+                statsItem.innerHTML = `
+                    <div style="color: #9b59b6; font-weight: bold; margin-bottom: 15px; font-size: 18px;">
+                        📊 System Statistics
+                    </div>
+                    <div style="color: white; display: grid; grid-template-columns: 1fr 1fr; gap: 15px;">
+                        <div>
+                            <div style="color: #ffd93d; font-weight: bold; margin-bottom: 5px;">Users</div>
+                            <div>Total Users: ${stats.total_users}</div>
+                            <div>Active Users: ${stats.active_users}</div>
+                            <div>Recent (24h): ${stats.recent_users_24h}</div>
+                        </div>
+                        <div>
+                            <div style="color: #ffd93d; font-weight: bold; margin-bottom: 5px;">Conversations</div>
+                            <div>Total: ${stats.total_conversations}</div>
+                            <div>Recent (24h): ${stats.recent_conversations_24h}</div>
+                            <div>Avg per User: ${(stats.total_conversations / Math.max(stats.total_users, 1)).toFixed(1)}</div>
+                        </div>
+                    </div>
+                    <div style="color: white; margin-top: 15px; font-size: 12px; opacity: 0.8;">
+                        Last updated: ${new Date(stats.timestamp).toLocaleString()}
+                    </div>
+                `;
+
+                historyList.appendChild(statsItem);
+            }
+
+            updateSessionStatus() {
+                if (this.currentUser) {
+                    this.elements.sessionStatus.textContent = `Active User: ${this.currentUser.user_id}`;
+                    this.elements.sessionInfo.style.display = 'block';
+                    this.elements.sessionInfo.innerHTML = `
+                        User ID: ${this.currentUser.user_id}<br>
+                        Created: ${new Date(this.currentUser.created_at).toLocaleString()}<br>
+                        Status: ${this.currentUser.status}
+                    `;
+                } else {
+                    this.elements.sessionStatus.textContent = 'No active session';
+                    this.elements.sessionInfo.style.display = 'none';
+                }
+            }
+
+            enableSessionControls(hasSession) {
+                this.elements.startSessionBtn.disabled = hasSession || (this.ws && this.ws.readyState !== WebSocket.OPEN);
+                this.elements.endSessionBtn.disabled = !hasSession;
+                this.elements.historyBtn.disabled = !hasSession;
+
+                // Update control states
+                this.enableControls(hasSession);
+
+                // Update recording status
+                if (hasSession) {
+                    this.elements.recordStatus.textContent = 'Click to start recording';
+                } else {
+                    this.elements.recordStatus.textContent = 'Start a session to enable recording';
+                }
+            }
+
+            enableControls(enabled) {
+                const hasSession = this.currentUser !== null;
+
+                this.elements.uploadBtn.disabled = !enabled || !hasSession || !this.elements.audioFile.files[0];
+                this.elements.ttsBtn.disabled = !enabled || !hasSession || !this.elements.textInput.value.trim();
+                this.elements.recordBtn.disabled = !enabled || !hasSession;
+            }
+
+            async uploadAudioFile() {
+                const file = this.elements.audioFile.files[0];
+                if (!file || !this.ws || !this.currentUser) return;
+
+                this.enableControls(false);
+                this.elements.results.style.display = 'none';
+
+                try {
+                    const audioData = await this.fileToBase64(file);
+                    this.sendMessage({
+                        type: 'audio_upload',
+                        audio_data: audioData.split(',')[1] // Remove data:audio/...;base64, prefix
+                    });
+                } catch (error) {
+                    this.addStatusMessage('❌', `Upload failed: ${error.message}`, 'error');
+                    this.enableControls(true);
+                }
+            }
+
+            async startRecording() {
+                if (!this.currentUser) {
+                    this.addStatusMessage('❌', 'No active session', 'error');
+                    return;
+                }
+
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    this.mediaRecorder = new MediaRecorder(stream);
+                    this.recordedChunks = [];
+
+                    this.mediaRecorder.ondataavailable = (event) => {
+                        if (event.data.size > 0) {
+                            this.recordedChunks.push(event.data);
+                        }
+                    };
+
+                    this.mediaRecorder.onstop = () => {
+                        this.processRecording();
+                    };
+
+                    this.mediaRecorder.start();
+                    this.isRecording = true;
+                    this.elements.recordBtn.classList.add('recording');
+                    this.elements.recordBtn.textContent = '⏹️';
+                    this.elements.recordStatus.textContent = 'Recording... Click to stop';
+                    this.addStatusMessage('🎙️', 'Recording started', 'info');
+
+                } catch (error) {
+                    console.error('Recording error:', error);
+                    this.addStatusMessage('❌', 'Microphone access denied', 'error');
+                }
+            }
+
+            stopRecording() {
+                if (this.mediaRecorder && this.isRecording) {
+                    this.mediaRecorder.stop();
+                    this.isRecording = false;
+                    this.elements.recordBtn.classList.remove('recording');
+                    this.elements.recordBtn.textContent = '🎙️';
+                    this.elements.recordStatus.textContent = 'Processing recording...';
+
+                    // Stop all tracks
+                    const tracks = this.mediaRecorder.stream.getTracks();
+                    tracks.forEach(track => track.stop());
+                }
+            }
+
+            async processRecording() {
+                if (this.recordedChunks.length === 0) return;
+
+                this.enableControls(false);
+                this.elements.results.style.display = 'none';
+
+                try {
+                    const blob = new Blob(this.recordedChunks, { type: 'audio/webm' });
+                    const audioData = await this.blobToBase64(blob);
+
+                    this.sendMessage({
+                        type: 'audio_upload',
+                        audio_data: audioData.split(',')[1] // Remove data:audio/...;base64, prefix
+                    });
+                } catch (error) {
+                    this.addStatusMessage('❌', `Recording processing failed: ${error.message}`, 'error');
+                    this.enableControls(true);
+                } finally {
+                    this.elements.recordStatus.textContent = 'Click to start recording';
+                }
+            }
+
+            textToSpeech() {
+                const text = this.elements.textInput.value.trim();
+                if (!text || !this.ws || !this.currentUser) return;
+
+                this.enableControls(false);
+                this.elements.results.style.display = 'none';
+
+                this.sendMessage({
+                    type: 'text_to_speech',
+                    text: text
+                });
+            }
+
+            sendMessage(message) {
+                if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                    this.ws.send(JSON.stringify(message));
+                } else {
+                    this.addStatusMessage('❌', 'Not connected to server', 'error');
+                }
+            }
+
+            updateConnectionStatus(status, text) {
+                this.elements.connectionStatus.className = `connection-status ${status}`;
+                this.elements.connectionStatus.textContent = text;
+            }
+
+            addStatusMessage(icon, text, type = 'info') {
+                const statusItem = document.createElement('div');
+                statusItem.className = 'status-item';
+                statusItem.innerHTML = `
+                    <span class="status-icon">${icon}</span>
+                    <span class="status-text">${text}</span>
+                    <span class="status-time">${new Date().toLocaleTimeString()}</span>
+                `;
+
+                this.elements.statusList.insertBefore(statusItem, this.elements.statusList.firstChild);
+
+                // Keep only last 10 messages
+                while (this.elements.statusList.children.length > 10) {
+                    this.elements.statusList.removeChild(this.elements.statusList.lastChild);
+                }
+            }
+
+            fileToBase64(file) {
+                return new Promise((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.readAsDataURL(file);
+                    reader.onload = () => resolve(reader.result);
+                    reader.onerror = error => reject(error);
+                });
+            }
+
+            blobToBase64(blob) {
+                return new Promise((resolve, reject) => {
+                    const reader = new FileReader();
+                    reader.readAsDataURL(blob);
+                    reader.onload = () => resolve(reader.result);
+                    reader.onerror = error => reject(error);
+                });
+            }
+
+            base64ToBlob(base64, mimeType) {
+                const byteCharacters = atob(base64);
+                const byteNumbers = new Array(byteCharacters.length);
+                for (let i = 0; i < byteCharacters.length; i++) {
+                    byteNumbers[i] = byteCharacters.charCodeAt(i);
+                }
+                const byteArray = new Uint8Array(byteNumbers);
+                return new Blob([byteArray], { type: mimeType });
+            }
+
+            // Keepalive ping
+            startKeepAlive() {
+                setInterval(() => {
+                    if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                        this.sendMessage({ type: 'ping' });
+                    }
+                }, 30000); // Ping every 30 seconds
+            }
+        }
+
+        // Global function to view user details
+        function viewUserDetails(userId) {
+            const app = window.voiceAssistantApp;
+            if (app) {
+                app.sendMessage({
+                    type: 'get_user_history',
+                    user_id: userId,
+                    limit: 50
+                });
+            }
+        }
+
+        // Tab switching function
+        function switchTab(tabName) {
+            // Hide all tab contents
+            document.querySelectorAll('.tab-content').forEach(content => {
+                content.classList.remove('active');
+            });
+
+            // Remove active class from all tabs
+            document.querySelectorAll('.tab').forEach(tab => {
+                tab.classList.remove('active');
+            });
+
+            // Show selected tab content
+            document.getElementById(tabName + 'Tab').classList.add('active');
+
+            // Add active class to clicked tab
+            event.target.classList.add('active');
+        }
+
+        // Initialize the application
+        window.addEventListener('load', () => {
+            const app = new VoiceAssistantWebSocket();
+            window.voiceAssistantApp = app; // Make it globally accessible
+            app.startKeepAlive();
+        });
+    </script>
+</body>
+</html>
