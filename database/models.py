@@ -6,7 +6,6 @@ from typing import Optional, Dict, Any
 from pydantic import BaseModel, Field
 import uuid
 
-
 class CallSession(BaseModel):
     """Call session model - represents each unique call"""
     call_id: str = Field(default_factory=lambda: f"call_{datetime.now().strftime('%Y%m%d_%H%M%S')}_{uuid.uuid4().hex[:8]}")

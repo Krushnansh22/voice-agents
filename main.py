@@ -161,7 +161,6 @@ def extract_appointment_details():
         r'(morning|सुबह)',  # Morning
         r'(afternoon|दोपहर)',  # Afternoon
         r'(evening|शाम)',  # Evening
-        r'(night|रात)',  # Night
         r'(\d{1,2}:\d{2})',  # HH:MM format
         r'(\d{1,2}\s*बजे)',  # X o'clock in Hindi
         r'(\d{1,2}\s*से\s*\d{1,2}:\d{2})',  # Time range
@@ -605,16 +604,17 @@ def append_incomplete_call_to_excel(patient_record, reason="call_incomplete", fi
 
 
 async def process_conversation_outcome():
-    """
-    Process the conversation to determine outcome and save to appropriate Excel file
-    """
+    """Process the conversation to determine outcome and save to appropriate Excel file"""
     global p_index, records, call_outcome_detected, current_call_uuid
 
-    if p_index >= len(records):
-        print("❌ No patient record available")
+    # Check if we have a valid patient record
+    if p_index >= len(records) or p_index < 0:
+        print(f"❌ Invalid p_index: {p_index}, records length: {len(records)}")
         return
 
     patient_record = records[p_index]
+
+    # Rest of the function remains the same...
 
     # Check for appointment booking first
     appointment_details = extract_appointment_details()
@@ -626,9 +626,9 @@ async def process_conversation_outcome():
             print(f"   Time: {appointment_details.get('appointment_time', 'TBD')}")
             call_outcome_detected = True
 
-            # Schedule hangup
-            if current_call_uuid:
-                await hangup_manager.schedule_hangup(current_call_uuid, "appointment_confirmed")
+            # let call hangup for appointment handled by terminate_call_gracefully when any farewell message detected.
+            # Schedule hangup """  if current_call_uuid:await hangup_manager.schedule_hangup(current_call_uuid, "appointment_confirmed") """
+            print("📋 Appointment confirmed - call will continue to natural ending")
         return
 
     # Check for reschedule request
@@ -638,22 +638,28 @@ async def process_conversation_outcome():
         if success:
             print(f"📅 Reschedule request recorded for {patient_record['name']}")
             call_outcome_detected = True
+            call_in_progress = False
 
-            # Schedule hangup
+            """ # Schedule hangup
             if current_call_uuid:
-                await hangup_manager.schedule_hangup(current_call_uuid, "reschedule_requested")
+                await hangup_manager.schedule_hangup(current_call_uuid, "reschedule_requested") """
+            # IMPORTANT: Don't reset flags here - let terminate_call_gracefully handle it
+            # The call should continue to natural goodbye and then terminate
+            print("📋 Reschedule detected - call will continue to natural ending")
         return
 
     print(f"ℹ️ No clear outcome detected yet for {patient_record['name']}")
 
 
 def handle_call_end():
-    """
-    Handle call end - check if outcome was detected, if not mark as incomplete
-    """
-    global p_index, records, call_outcome_detected
+    """Handle call end - check if outcome was detected, if not mark as incomplete"""
+    global p_index, records, call_outcome_detected, call_in_progress
 
     if p_index >= len(records):
+        print(f"⚠️ handle_call_end called but p_index ({p_index}) >= records length ({len(records)})")
+        # Reset flags even if no record
+        call_outcome_detected = False
+        call_in_progress = False
         return
 
     patient_record = records[p_index]
@@ -674,6 +680,7 @@ def handle_call_end():
             print(f"   Duration: {call_duration} seconds")
 
     call_outcome_detected = False
+    print(f"🔄 Call outcome flags reset for next call")
 
 
 async def terminate_call_gracefully(websocket, realtime_ai_ws, reason="completed"):
@@ -692,7 +699,6 @@ async def terminate_call_gracefully(websocket, realtime_ai_ws, reason="completed
         await asyncio.sleep(2)
 
         try:
-            # Schedule the hangup with delay - this replaces the old Plivo termination
             await hangup_manager.schedule_hangup(current_call_uuid, reason)
             print(f"📞 Call hangup scheduled via CallHangupManager: {current_call_uuid}")
         except Exception as e:
@@ -717,7 +723,7 @@ async def terminate_call_gracefully(websocket, realtime_ai_ws, reason="completed
             await websocket.close()
             print("✅ WebSocket closed - Stream terminated")
 
-        # IMPORTANT: Increment p_index after call completion
+        # ONLY INCREMENT p_index ONCE HERE - REMOVE FROM OTHER PLACES
         p_index += 1
         print(f"📈 Call completed. Moving to next record. p_index now: {p_index}")
 
@@ -728,6 +734,7 @@ async def terminate_call_gracefully(websocket, realtime_ai_ws, reason="completed
         conversation_transcript.clear()
 
         print(f"🎯 Call termination completed successfully. Reason: {reason}")
+        print(f"📊 Status: call_in_progress={call_in_progress}, p_index={p_index}, total_records={len(records)}")
 
     except Exception as e:
         print(f"❌ Error during call termination: {e}")
@@ -735,7 +742,7 @@ async def terminate_call_gracefully(websocket, realtime_ai_ws, reason="completed
         call_in_progress = False
         current_call_session = None
         current_call_uuid = None
-        # Still increment p_index on error to avoid infinite loop
+        # ONLY increment here, not in other places
         p_index += 1
         print(f"📈 Error occurred, but moving to next record. p_index now: {p_index}")
 
@@ -765,108 +772,146 @@ def read_hospital_records(filename="Hospital_Records.xlsx"):
 
 async def make_call_via_webhook(phone_number, name, record_index):
     """Make a call by triggering the webhook"""
-    global call_in_progress
+    global call_in_progress, p_index
     try:
-        # Set the global p_index to the current record
-        global p_index
+        # Ensure p_index matches the record we're calling
         p_index = record_index
 
-        # Call the webhook endpoint
+        # Check if this number was already called (optional - remove if you want to allow repeat calls)
         if phone_number not in [call['phone'] for call in called_numbers]:
             async with httpx.AsyncClient(timeout=30.0) as client:
                 response = await client.post(f"{settings.HOST_URL}/webhook")
 
             if response.status_code == 200:
-                # Track successful call immediately when call is initiated
+                # Track successful call initiation
                 called_numbers.append({
                     'phone': phone_number,
                     'name': name,
                     'record_index': record_index,
                     'timestamp': time.strftime('%Y-%m-%d %H:%M:%S')
                 })
-                print(f"✅ Call initiated successfully to {phone_number} ({name}) - Record #{record_index}")
+                print(f"✅ Call webhook successful for {phone_number} ({name}) - Record #{record_index}")
                 return True
             else:
                 print(f"❌ Webhook failed for {phone_number} ({name}) - Status: {response.status_code}")
                 return False
+        else:
+            print(f"⏭ Skipping {phone_number} ({name}) - Already called")
+            return False
 
     except Exception as e:
         print(f"❌ Failed to call {phone_number} ({name}): {e}")
         return False
 
 
+def check_and_reset_stuck_call():
+    """Check if call is stuck and reset flags if needed"""
+    global call_in_progress, call_start_time, p_index, current_call_uuid
+
+    if call_in_progress and call_start_time:
+        elapsed = time.time() - call_start_time
+        # If call has been running for more than 8 minutes, consider it stuck
+        if elapsed > (MAX_CALL_DURATION + 180):  # 5 minutes + 3 minutes buffer
+            print(f"⚠️ Call appears stuck for {elapsed:.0f}s - forcing reset")
+
+            # Try to hangup the call if we have UUID
+            if current_call_uuid:
+                try:
+                    plivo_client.calls.hangup(call_uuid=current_call_uuid)
+                    print(f"📞 Force hung up stuck call: {current_call_uuid}")
+                except Exception as e:
+                    print(f"❌ Failed to hangup stuck call: {e}")
+
+            # Record as incomplete call
+            if p_index < len(records):
+                patient_record = records[p_index]
+                append_incomplete_call_to_excel(patient_record, "call_stuck")
+                print(f"⚠️ Stuck call recorded for {patient_record['name']}")
+
+            # Reset all flags and move to next record
+            call_in_progress = False
+            current_call_uuid = None
+            conversation_transcript.clear()
+            p_index += 1
+
+            print(f"🔄 Stuck call reset complete. Moving to p_index: {p_index}")
+            return True
+    return False
+
+
 def background_checker():
-    """Simple background checker that runs every 60 seconds"""
+    """Background checker that waits for calls to complete properly"""
     global last_processed_count, call_in_progress, p_index
 
-    print("🚀 Background checker started - monitoring every 60 seconds")
+    print("🚀 Background checker started - monitoring every 30 seconds")
 
     while True:
         try:
-            print("📋 Checking for new records...")
+            # First, check if current call is stuck and reset if needed
+            if check_and_reset_stuck_call():
+                print("🔄 Stuck call was reset, continuing with next check")
+                continue
+            print(f"📋 Checking status: p_index={p_index}, call_in_progress={call_in_progress}")
 
             # Read current records
             current_count = read_hospital_records()
 
-            # Calculate new records based on p_index (not last_processed_count)
-            new_records = current_count - p_index
+            # Only proceed if no call is in progress and we have records to process
+            if not call_in_progress and p_index < current_count:
+                record = records[p_index]
+                phone_number = record.get('phone_number')
+                name = record.get('name', 'Unknown')
 
-            if new_records > 0 and not call_in_progress:
-                print(f"🔥 Found {new_records} NEW records! Processing from p_index: {p_index}")
+                if phone_number:
+                    print(f"📞 Initiating call to record #{p_index}: {phone_number} ({name})")
 
-                # Check if we have a valid record to call
-                if p_index < len(records):
-                    record = records[p_index]
-                    phone_number = record.get('phone_number')
-                    name = record.get('name', 'Unknown')
+                    # Set call_in_progress BEFORE making the call
+                    call_in_progress = True
 
-                    if phone_number:
-                        print(f"📞 Processing record #{p_index}: {phone_number} ({name})")
-
-                        # Make call via webhook
-                        success = asyncio.run(make_call_via_webhook(phone_number, name, p_index))
+                    # Create a new event loop for this thread
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    try:
+                        success = loop.run_until_complete(make_call_via_webhook(phone_number, name, p_index))
 
                         if success:
-                            print(f"✅ Call initiated for {phone_number} ({name})")
-                            # Wait for call to complete before processing next
-                            print("⏳ Waiting for call to complete...")
+                            print(f"✅ Call webhook sent successfully for {phone_number} ({name})")
+                            print(f"⏳ Waiting for call to complete... (call_in_progress={call_in_progress})")
 
-                            # Wait for call_in_progress to be reset
-                            wait_time = 0
-                            while call_in_progress and wait_time < 300:  # Max 5 minutes wait
-                                time.sleep(5)
-                                wait_time += 5
-                                print(f"⏳ Waiting for call completion... ({wait_time}s)")
-
-                            if call_in_progress:
-                                print("⚠ Call timeout - proceeding to next record")
-                                call_in_progress = False
-                                p_index += 1  # Force increment on timeout
+                            # Don't increment p_index here - it will be done in terminate_call_gracefully
 
                         else:
-                            print(f"❌ Call failed for {phone_number} ({name})")
+                            print(f"❌ Call webhook failed for {phone_number} ({name})")
+                            # Reset flags and skip this record
                             call_in_progress = False
-                            p_index += 1  # Increment on failure
+                            p_index += 1
 
-                        # Small delay between records
-                        time.sleep(10)
-                    else:
-                        print(f"⏭ Skipping record #{p_index} - No phone number")
-                        p_index += 1  # Skip record with no phone number
+                    except Exception as e:
+                        print(f"❌ Error in call webhook: {e}")
+                        call_in_progress = False
+                        p_index += 1
+                    finally:
+                        loop.close()
+
                 else:
-                    print(f"✅ All records processed. p_index: {p_index}, total records: {current_count}")
+                    print(f"⏭ Skipping record #{p_index} - No phone number")
+                    p_index += 1
 
             elif call_in_progress:
-                print(f"⏸ Call in progress (p_index: {p_index}), waiting...")
+                print(f"⏸ Call in progress for record #{p_index}, waiting for completion...")
+            elif p_index >= current_count:
+                print(f"✅ All records processed. p_index: {p_index}, total records: {current_count}")
             else:
-                print(f"✅ No new records found. p_index: {p_index}, total records: {current_count}")
+                print(f"📊 Waiting for new records. Current: {current_count}, Processed: {p_index}")
 
         except Exception as e:
             print(f"❌ Background check error: {e}")
-            call_in_progress = False  # Reset on error
+            # Reset call_in_progress on error to prevent getting stuck
+            if call_in_progress:
+                call_in_progress = False
+                print("🔄 Reset call_in_progress due to error")
 
         # Wait 60 seconds before next check
-        print("⏳ Waiting 60 seconds for next check...")
         time.sleep(60)
 
 
@@ -958,7 +1003,17 @@ async def websocket_endpoint(websocket: WebSocket):
                     break  # Connection is broken
 
     except WebSocketDisconnect:
-        print("Dashboard WebSocket disconnected")
+        print("📞 Client disconnected from WebSocket")
+
+        # Check if call had an outcome or was incomplete
+        global call_outcome_detected, call_in_progress
+
+        if not call_outcome_detected:
+            print("⚠️ Call disconnected without clear outcome")
+            handle_call_end()  # This will record as incomplete and reset flags
+
+        # Don't reset call_in_progress here - let terminate_call_gracefully handle it
+        print("🔄 WebSocket disconnect handled")
     except Exception as e:
         print(f"WebSocket error: {e}")
     finally:
@@ -981,7 +1036,7 @@ async def webhook_handler(request: Request):
         print(f"📨 Webhook POST request received! p_index: {p_index}, records_length: {len(records)}")
 
         # Safety check for valid index
-        if p_index < len(records) and p_index >= 0 and not call_in_progress:
+        if p_index < len(records) and p_index >= 0:
             phone_number = records[p_index]['phone_number']
             name = records[p_index].get('name', 'Unknown')
 
@@ -1166,11 +1221,12 @@ async def handle_media_stream(websocket: WebSocket):
                         status="ended"
                     )
 
-                # IMPORTANT: Reset call_in_progress and increment p_index
-                global call_in_progress, p_index
-                call_in_progress = False
-                p_index += 1
-                print(f"📈 Call disconnected. Moving to next record. p_index now: {p_index}")
+                # IMPORTANT: Reset call_in_progress but don't increment p_index here
+                # (it's handled in terminate_call_gracefully)
+                global call_in_progress
+                if call_in_progress:  # Only reset if it was still in progress
+                    print(f"📈 Call disconnected unexpectedly. Resetting call_in_progress flag.")
+                    call_in_progress = False
 
         async def send_to_twilio():
             """Receive events from the OpenAI Realtime API, send audio back to Twilio."""
@@ -1240,21 +1296,16 @@ async def handle_media_stream(websocket: WebSocket):
 
                             # Check for appointment confirmation triggers
                             appointment_triggers = [
-                                'slot book कर लिया',
-                                'बुक कर दिया है',
-                                'अपॉइंटमेंट.*बुक.*है',
-                                'आपका अपॉइंटमेंट.*फिक्स',
-                                'तो मैंने.*बुक कर दिया',
-                                'शानदार.*बुक कर दिया'
+                                'slot book कर लिया'
                             ]
 
                             # Check for reschedule triggers
                             reschedule_triggers = [
                                 'बिल्कुल समझ सकती हूँ',
-                                'कोई बात नहीं',
                                 'आप बताइए कि कब',
                                 'tentative slot hold कर लेती हूँ',
-                                'partner से पूछना है'
+                                'partner से पूछना है',
+                                'जी, बिल्कुल। आप मुझे उसी नंबर पर वापस बंकर सकते हैं जिससे कॉल आई है। धन्यवाद!'
                             ]
 
                             if any(re.search(trigger, transcript, re.IGNORECASE) for trigger in appointment_triggers):
@@ -1429,6 +1480,12 @@ SLOT SUGGESTION:
 "आपके लिए कौन सा day ज़्यादा convenient रहेगा – Monday से Saturday के बीच?"
 (जवाब सुनें और acknowledge करें)
 "Perfect! और उस दिन कौन सा time better रहेगा – morning, afternoon या evening?"
+
+RESCHEDULE (Use ONLY these phrases when user wants to reschedule):
+"बिल्कुल समझ सकती हूँ "
+"आप बताइए कि कब karu call"
+"tentative slot hold कर लेती हूँ"
+"जी, बिल्कुल। आप मुझे उसी नंबर पर वापस कॉल कर सकते हैं जिससे कॉल आई है। धन्यवाद!"
 
 BOOKING CONFIRMATION:
 "तो ठीक है, मैं आपके लिए [day] [time] का slot reserve कर रही हूँ।"
