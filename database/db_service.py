@@ -2,7 +2,7 @@
 Simplified Database Service for Call Transcripts
 """
 import logging
-from datetime import datetime
+from datetime import datetime,timezone
 from typing import List, Optional
 from motor.motor_asyncio import AsyncIOMotorClient
 from .models import (
@@ -62,6 +62,10 @@ class DatabaseService:
             self.client.close()
             logger.info("🔌 Disconnected from MongoDB")
 
+    def _get_current_utc_time(self):
+        """Get current UTC time - use this method consistently"""
+        return datetime.now(timezone.utc)
+
     # Call Session Operations
     async def create_call_session(self, patient_name: str, patient_phone: str, call_id: str = None) -> CallSession:
         """Create a new call session"""
@@ -90,7 +94,7 @@ class DatabaseService:
                 {
                     "$set": {
                         "status": "ended",
-                        "ended_at": datetime.utcnow()
+                        "ended_at":  self._get_current_utc_time()  # using proper UTC time
                     }
                 }
             )
