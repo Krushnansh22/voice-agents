@@ -1,5 +1,5 @@
 """
-Enhanced Call Queue Manager for Controlled Calling System
+Enhanced Call Queue Manager with Improved Stop Functionality
 """
 import asyncio
 import logging
@@ -86,9 +86,11 @@ class CallQueueManager:
             "queue_completed_at": None
         }
 
-        # Control flags
+        # Control flags - IMPROVED
         self._should_stop = False
         self._calling_task = None
+        self._call_in_progress = False  # NEW: Track if a call is currently active
+        self._stop_after_current_call = False  # NEW: Flag to stop after current call
 
         logger.info("CallQueueManager initialized")
 
@@ -174,6 +176,7 @@ class CallQueueManager:
 
             self.status = QueueStatus.RUNNING
             self._should_stop = False
+            self._stop_after_current_call = False  # Reset stop flag
             self.stats["queue_started_at"] = datetime.now()
 
             # Start the calling task
@@ -212,27 +215,49 @@ class CallQueueManager:
         return {"success": False, "error": f"Cannot resume queue in {self.status.value} state"}
 
     async def stop_queue(self) -> Dict:
-        """Stop the calling queue"""
+        """Stop the calling queue - IMPROVED VERSION"""
         try:
+            logger.info("🛑 Stop queue requested")
+            
+            # Set stop flags
             self._should_stop = True
-            self.status = QueueStatus.STOPPED
+            
+            # Check if a call is currently in progress
+            if self._call_in_progress:
+                logger.info("📞 Call in progress - will stop after current call completes")
+                self._stop_after_current_call = True
+                self.status = QueueStatus.STOPPED  # Update status immediately
+                
+                return {
+                    "success": True,
+                    "status": self.status.value,
+                    "message": "Queue will stop after current call completes",
+                    "call_in_progress": True,
+                    "calls_completed": self.current_index,
+                    "total_records": self.total_records
+                }
+            else:
+                # No call in progress, stop immediately
+                self.status = QueueStatus.STOPPED
 
-            # Cancel the calling task
-            if self._calling_task and not self._calling_task.done():
-                self._calling_task.cancel()
-                try:
-                    await self._calling_task
-                except asyncio.CancelledError:
-                    pass
+                # Cancel the calling task
+                if self._calling_task and not self._calling_task.done():
+                    self._calling_task.cancel()
+                    try:
+                        await self._calling_task
+                    except asyncio.CancelledError:
+                        logger.info("✅ Calling task cancelled successfully")
 
-            logger.info("Queue stopped")
+                logger.info("✅ Queue stopped immediately - no active call")
 
-            return {
-                "success": True,
-                "status": self.status.value,
-                "calls_completed": self.current_index,
-                "total_records": self.total_records
-            }
+                return {
+                    "success": True,
+                    "status": self.status.value,
+                    "message": "Queue stopped immediately",
+                    "call_in_progress": False,
+                    "calls_completed": self.current_index,
+                    "total_records": self.total_records
+                }
 
         except Exception as e:
             logger.error(f"Failed to stop queue: {e}")
@@ -273,6 +298,8 @@ class CallQueueManager:
 
             self.current_index = 0
             self.status = QueueStatus.IDLE
+            self._call_in_progress = False  # Reset call progress flag
+            self._stop_after_current_call = False  # Reset stop flag
 
             # Reset stats
             self.stats = {
@@ -296,7 +323,6 @@ class CallQueueManager:
         except Exception as e:
             logger.error(f"Failed to reset queue: {e}")
             return {"success": False, "error": str(e)}
-
 
     def get_status(self) -> Dict:
         """Get current queue status and statistics"""
@@ -322,7 +348,9 @@ class CallQueueManager:
             "upload_timestamp": self.upload_timestamp.isoformat() if self.upload_timestamp else None,
             "stats": serialized_stats,
             "current_record": self.records[self.current_index].to_dict() if self.current_index < len(
-                self.records) else None
+                self.records) else None,
+            "call_in_progress": self._call_in_progress,  # NEW: Include call progress status
+            "stop_pending": self._stop_after_current_call  # NEW: Include stop pending status
         }
 
     def get_current_record(self) -> Optional[CallRecord]:
@@ -364,11 +392,16 @@ class CallQueueManager:
             logger.info("All calls completed!")
 
     async def _calling_loop(self):
-        """Internal calling loop integrated with real call logic"""
+        """Internal calling loop - COMPLETELY FIXED VERSION"""
         try:
             while (self.current_index < self.total_records and
-                   not self._should_stop and
-                   self.status in [QueueStatus.RUNNING, QueueStatus.PAUSED]):
+                not self._should_stop and
+                self.status in [QueueStatus.RUNNING, QueueStatus.PAUSED]):
+
+                # Check for stop condition at the start of each iteration
+                if self._should_stop:
+                    logger.info("🛑 Stop flag detected - exiting calling loop")
+                    break
 
                 if self.status == QueueStatus.PAUSED:
                     await asyncio.sleep(1)
@@ -379,10 +412,8 @@ class CallQueueManager:
                     logger.info(
                         f"🔄 Processing call {self.current_index + 1}/{self.total_records}: {current_record.name}")
 
-                    # Mark as calling and attempt the call
-                    current_record.status = CallResult.CALLING
-                    current_record.last_attempt = datetime.now()
-                    current_record.attempts += 1
+                    # Set call in progress flag BEFORE making call
+                    self._call_in_progress = True
 
                     # Make the actual call via webhook
                     success = await self._make_actual_call(current_record)
@@ -390,51 +421,78 @@ class CallQueueManager:
                     if success:
                         logger.info(f"✅ Call initiated successfully for {current_record.name}")
 
-                        # Wait for call to complete naturally
-                        # The call outcome will be handled by the media stream logic
+                        # CRITICAL: Wait for call to complete - FIXED LOGIC
                         call_timeout = 0
                         max_call_duration = 600  # 10 minutes max per call
+                        check_interval = 5  # Check every 5 seconds
 
+                        # Wait until call is no longer in CALLING status
                         while (current_record.status == CallResult.CALLING and
-                               not self._should_stop and
-                               self.status == QueueStatus.RUNNING and
-                               call_timeout < max_call_duration):
-                            await asyncio.sleep(5)  # Check every 5 seconds
-                            call_timeout += 5
+                            not self._should_stop and
+                            self.status in [QueueStatus.RUNNING, QueueStatus.STOPPED] and
+                            call_timeout < max_call_duration):
+                            
+                            logger.info(f"⏳ Waiting for call to complete: {current_record.name} (timeout: {call_timeout}s)")
+                            await asyncio.sleep(check_interval)
+                            call_timeout += check_interval
+                            
+                            # Check for stop condition during call
+                            if self._should_stop:
+                                logger.info(f"🛑 Stop requested during call to {current_record.name}")
+                                break
 
-                        # If call timed out, mark as failed
+                        # Call completed or timed out - clear in progress flag
+                        self._call_in_progress = False
+
+                        # If call timed out, mark as failed and move to next
                         if call_timeout >= max_call_duration and current_record.status == CallResult.CALLING:
                             logger.warning(f"⏰ Call timed out for {current_record.name}")
-                            current_record.status = CallResult.CALL_FAILED
-                            current_record.result_details = "Call timeout - exceeded maximum duration"
+                            await self.mark_call_result(CallResult.CALL_FAILED, "Call timeout - exceeded maximum duration")
                             await self.move_to_next_record()
+
+                        # Check if we should stop after this call
+                        if self._stop_after_current_call:
+                            logger.info(f"🛑 Stopping queue after completing call to {current_record.name}")
+                            break
+
+                        # If call completed successfully, the move_to_next_record will be handled by complete_current_call
+                        logger.info(f"✅ Call completed for {current_record.name}, status: {current_record.status.value}")
 
                     else:
                         # Call failed to initiate, move to next
                         logger.error(f"❌ Failed to initiate call for {current_record.name}")
-                        current_record.status = CallResult.CALL_FAILED
-                        current_record.result_details = "Failed to initiate call"
+                        await self.mark_call_result(CallResult.CALL_FAILED, "Failed to initiate call")
+                        self._call_in_progress = False  # Clear flag
                         await self.move_to_next_record()
 
-                    # Brief pause between call attempts
+                    # Brief pause between call attempts (only if not stopping)
                     if not self._should_stop and self.status == QueueStatus.RUNNING:
                         await asyncio.sleep(10)  # 10 second pause between calls
 
                 else:
                     # Current record already processed or no record, move to next
+                    logger.info(f"📝 Current record already processed or invalid, moving to next")
                     await self.move_to_next_record()
 
-            # Queue completed
-            if self.current_index >= self.total_records:
+            # Queue completed or stopped
+            if self.current_index >= self.total_records and not self._should_stop:
                 self.status = QueueStatus.COMPLETED
                 self.stats["queue_completed_at"] = datetime.now()
                 logger.info("🎉 All calls in queue completed!")
+            elif self._should_stop:
+                self.status = QueueStatus.STOPPED
+                logger.info("🛑 Queue stopped as requested")
 
         except asyncio.CancelledError:
             logger.info("⏹️ Calling loop cancelled")
+            self.status = QueueStatus.STOPPED
         except Exception as e:
             logger.error(f"❌ Error in calling loop: {e}")
             self.status = QueueStatus.ERROR
+        finally:
+            # Clean up flags
+            self._call_in_progress = False
+            self._stop_after_current_call = False
 
     async def _make_actual_call(self, record):
         """Make the actual call via webhook to Plivo"""
@@ -462,9 +520,8 @@ class CallQueueManager:
             logger.error(f"❌ Exception during webhook call: {e}")
             return False
 
-    # ALSO ADD this method to handle call completion from main.py
     async def complete_current_call(self, result: CallResult, details: str = None):
-        """Mark current call as complete and move to next"""
+        """Mark current call as complete and move to next - IMPROVED WITH STOP HANDLING"""
         if self.current_index < len(self.records):
             current_record = self.records[self.current_index]
             current_record.status = result
@@ -485,8 +542,30 @@ class CallQueueManager:
 
             logger.info(f"✅ Call completed: {result.value} for {current_record.name}")
 
-            # Move to next record
-            await self.move_to_next_record()
+            # Clear call in progress flag
+            self._call_in_progress = False
+
+            # CRITICAL: Check if we should stop before moving to next record
+            if self._stop_after_current_call or self._should_stop:
+                logger.info("🛑 Queue stop requested - NOT moving to next record")
+                self.status = QueueStatus.STOPPED
+                
+                # Cancel the calling task if it exists
+                if self._calling_task and not self._calling_task.done():
+                    self._calling_task.cancel()
+                
+                # Reset stop flags
+                self._stop_after_current_call = False
+                
+                logger.info(f"🛑 Queue stopped after completing call to {current_record.name}")
+            else:
+                # Normal flow - move to next record
+                await self.move_to_next_record()
+                logger.info(f"➡️ Moving to next record (index: {self.current_index})")
+
+        else:
+            logger.warning("⚠️ No current record to complete")
+            self._call_in_progress = False
 
 
 # Global instance

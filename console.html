@@ -1021,39 +1021,58 @@
                 }
             }
         }
-
         // Global functions for button onclick handlers
-        let console = null;
+        let callCenterConsole = null; // Changed from 'console' to 'callCenterConsole'
 
         function startQueue() {
-            console.startQueue();
+            if (callCenterConsole) {
+                callCenterConsole.startQueue();
+            } else {
+                console.error('Call center console not initialized');
+            }
         }
 
         function pauseQueue() {
-            console.pauseQueue();
+            if (callCenterConsole) {
+                callCenterConsole.pauseQueue();
+            } else {
+                console.error('Call center console not initialized');
+            }
         }
 
         function stopQueue() {
-            console.stopQueue();
+            if (callCenterConsole) {
+                callCenterConsole.stopQueue();
+            } else {
+                console.error('Call center console not initialized');
+            }
         }
 
         function skipCurrent() {
-            console.skipCurrent();
+            if (callCenterConsole) {
+                callCenterConsole.skipCurrent();
+            } else {
+                console.error('Call center console not initialized');
+            }
         }
 
         function resetQueue() {
-            console.resetQueue();
+            if (callCenterConsole) {
+                callCenterConsole.resetQueue();
+            } else {
+                console.error('Call center console not initialized');
+            }
         }
 
         // Initialize when page loads
         document.addEventListener('DOMContentLoaded', () => {
-            console = new CallCenterConsole();
+            callCenterConsole = new CallCenterConsole(); // Changed variable name
         });
 
         // Cleanup on page unload
         window.addEventListener('beforeunload', () => {
-            if (console) {
-                console.destroy();
+            if (callCenterConsole) {
+                callCenterConsole.destroy();
             }
         });
     </script>

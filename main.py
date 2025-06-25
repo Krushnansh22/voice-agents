@@ -29,7 +29,7 @@ from database.db_service import db_service
 from database.websocket_manager import websocket_manager
 
 # NEW: Import CallQueueManager
-from call_queue_manager import call_queue_manager, CallResult
+from call_queue_manager import call_queue_manager, CallResult, QueueStatus
 
 warnings.filterwarnings("ignore")
 from dotenv import load_dotenv
@@ -644,7 +644,7 @@ async def process_conversation_outcome():
                 f"Date: {appointment_details.get('appointment_date', 'TBD')}, Time: {appointment_details.get('appointment_time', 'TBD')}"
             )
 
-            call_outcome_detected = True
+            call_outcome_detected = CallResult.APPOINTMENT_BOOKED  # Store the actual result
             print("📋 Appointment confirmed - call will continue to natural ending")
         return
 
@@ -659,7 +659,7 @@ async def process_conversation_outcome():
             callback_info = f"Preferred: {callback_details.get('callback_day', 'TBD')} {callback_details.get('callback_time', 'TBD')}"
             await call_queue_manager.mark_call_result(CallResult.RESCHEDULE_REQUESTED, callback_info)
 
-            call_outcome_detected = True
+            call_outcome_detected = CallResult.RESCHEDULE_REQUESTED  # Store the actual result
             print("📋 Reschedule detected - call will continue to natural ending")
         return
 
@@ -703,11 +703,11 @@ async def terminate_call_gracefully(websocket, realtime_ai_ws, reason="completed
             print(f"✅ Call session ended in database: {current_call_session.call_id}")
 
         # Close WebSocket (this will end the stream)
-        if websocket and not websocket.client_state.DISCONNECTED:
+        """ if websocket and not websocket.client_state.DISCONNECTED:
             await websocket.close()
-            print("✅ WebSocket closed - Stream terminated")
+            print("✅ WebSocket closed - Stream terminated") """
 
-        # Handle call outcome with queue manager
+        # Handle call outcome with queue manager - IMPROVED LOGIC
         current_record = call_queue_manager.get_current_record()
         if current_record:
             if not call_outcome_detected:
@@ -733,8 +733,19 @@ async def terminate_call_gracefully(websocket, realtime_ai_ws, reason="completed
                 }
                 append_incomplete_call_to_excel(patient_record, reason_detail)
             else:
-                # Call had a successful outcome, queue manager already updated
+                # Call had a successful outcome, just complete it without moving to next
                 print(f"✅ Call completed successfully with outcome detected")
+                
+                # IMPORTANT: Just mark as complete, don't move to next if stopping
+                if call_queue_manager._stop_after_current_call or call_queue_manager._should_stop:
+                    print("🛑 Queue is stopping - not moving to next record")
+                    # Just mark the call as complete without moving forward
+                    current_record.status = call_outcome_detected  # This should already be set
+                    call_queue_manager._call_in_progress = False
+                    # Don't call move_to_next_record()
+                else:
+                    # Normal completion - move to next
+                    await call_queue_manager.move_to_next_record()
 
         # Reset global flags
         current_call_session = None
@@ -754,7 +765,6 @@ async def terminate_call_gracefully(websocket, realtime_ai_ws, reason="completed
         # Still complete the call in queue manager
         if call_queue_manager.get_current_record():
             await call_queue_manager.complete_current_call(CallResult.CALL_FAILED, f"Error: {str(e)}")
-
 
 async def controlled_make_call():
     """Make a call for the current record in queue"""
@@ -1088,50 +1098,81 @@ async def get_appointment_details():
     details = extract_appointment_details()
     return JSONResponse(details)
 
-
 @app.api_route("/webhook", methods=["GET", "POST"])
 async def webhook_handler(request: Request):
-    """Modified webhook handler for controlled calling"""
+    """COMPLETELY FIXED webhook handler for controlled calling"""
     global current_call_uuid
 
     if request.method == "POST":
         print(f"📨 Webhook POST request received!")
 
+        # CRITICAL: Check if queue is stopped or stopping
+        if call_queue_manager.status in [QueueStatus.STOPPED, QueueStatus.COMPLETED]:
+            print(f"🛑 Queue is {call_queue_manager.status.value} - rejecting webhook call")
+            return {"status": "rejected", "reason": f"Queue is {call_queue_manager.status.value}"}
+
+        if call_queue_manager._should_stop or call_queue_manager._stop_after_current_call:
+            print(f"🛑 Queue stop requested - rejecting webhook call")
+            return {"status": "rejected", "reason": "Queue stop requested"}
+
         # Get current record from queue manager
         current_record = call_queue_manager.get_current_record()
 
-        if current_record:
+        if current_record and current_record.status == CallResult.PENDING:
             phone_number = current_record.phone
             name = current_record.name
 
             try:
-                call_made = plivo_client.calls.create(
+                print(f"📞 Attempting Plivo call to {phone_number} ({name})")
+
+                # FIXED: Proper Plivo call creation
+                call_response = plivo_client.calls.create(
                     from_=settings.PLIVO_FROM_NUMBER,
                     to_=phone_number,
                     answer_url=settings.PLIVO_ANSWER_XML,
                     answer_method='GET'
                 )
 
-                print(f"📞 Plivo call initiated to {phone_number} ({name})")
+                # FIXED: Access call_uuid correctly from response
+                call_uuid = call_response.call_uuid if hasattr(call_response, 'call_uuid') else getattr(call_response, 'message_uuid', 'unknown')
+                
+                print(f"✅ Plivo call initiated successfully to {phone_number} ({name})")
+                print(f"📞 Call UUID: {call_uuid}")
 
-                # Mark record as calling
+                # Mark record as calling AFTER successful Plivo call
                 current_record.status = CallResult.CALLING
                 current_record.last_attempt = datetime.now()
                 current_record.attempts += 1
 
-                return {"status": "success", "called": phone_number, "record_index": current_record.index}
+                return {
+                    "status": "success", 
+                    "called": phone_number, 
+                    "record_index": current_record.index,
+                    "call_uuid": call_uuid
+                }
 
             except Exception as e:
                 print(f"❌ Plivo call failed: {e}")
 
-                # Mark as failed
-                await call_queue_manager.mark_call_result(CallResult.CALL_FAILED, str(e))
-                await call_queue_manager.move_to_next_record()
+                # Mark as failed but DON'T move to next record here - let calling loop handle it
+                current_record.status = CallResult.CALL_FAILED
+                current_record.result_details = str(e)
+                current_record.last_attempt = datetime.now()
+                current_record.attempts += 1
+
+                # Update statistics
+                call_queue_manager.stats["total_calls"] += 1
+                call_queue_manager.stats["failed_calls"] += 1
 
                 return {"status": "error", "message": str(e)}
         else:
-            print(f"❌ No current record available in queue")
-            return {"status": "error", "message": "No current record in queue"}
+            # Check why no valid record
+            if not current_record:
+                print(f"❌ No current record available (index: {call_queue_manager.current_index}, total: {call_queue_manager.total_records})")
+            else:
+                print(f"❌ Current record status is {current_record.status.value}, expected PENDING")
+            
+            return {"status": "error", "message": "No valid current record in queue"}
 
     else:
         # GET request - Call event from Plivo
@@ -1148,6 +1189,29 @@ async def webhook_handler(request: Request):
         if call_uuid:
             current_call_uuid = call_uuid
             print(f"💾 Stored current Call UUID: {current_call_uuid}")
+
+        # Handle call events to update queue status
+        if event == "StartApp" and call_status == "in-progress":
+            print(f"📞 Call started successfully: {call_uuid}")
+            # Call is now active, no need to change status as it's already CALLING
+
+        elif event == "Hangup" or call_status in ["completed", "failed", "busy", "no-answer"]:
+            print(f"📞 Call ended: {call_uuid}, Status: {call_status}")
+            
+            # Find the current record and mark it as completed based on status
+            current_record = call_queue_manager.get_current_record()
+            if current_record and current_record.status == CallResult.CALLING:
+                if call_status == "completed":
+                    # You can set this to whatever result you want based on your business logic
+                    asyncio.create_task(call_queue_manager.complete_current_call(
+                        CallResult.CALL_INCOMPLETE, 
+                        f"Call completed - {call_status}"
+                    ))
+                else:
+                    asyncio.create_task(call_queue_manager.complete_current_call(
+                        CallResult.CALL_FAILED, 
+                        f"Call failed - {call_status}"
+                    ))
 
         # Return XML response for Plivo
         xml_data = f'''<?xml version="1.0" encoding="UTF-8"?>
