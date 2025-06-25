@@ -1,0 +1,1061 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Aveya IVF - Call Center Console</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: #333;
+        }
+
+        .console-container {
+            max-width: 1600px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .header {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 25px 35px;
+            margin-bottom: 25px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .header h1 {
+            color: #2c3e50;
+            font-size: 2.4em;
+            font-weight: 600;
+            margin-bottom: 8px;
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+
+        .header p {
+            color: #7f8c8d;
+            font-size: 1.1em;
+        }
+
+        .main-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 25px;
+            margin-bottom: 25px;
+        }
+
+        .control-panel {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 30px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .panel-title {
+            font-size: 1.4em;
+            font-weight: 600;
+            color: #2c3e50;
+            margin-bottom: 20px;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .upload-section {
+            margin-bottom: 30px;
+            padding: 25px;
+            background: #f8f9fa;
+            border-radius: 12px;
+            border: 2px dashed #dee2e6;
+            transition: all 0.3s ease;
+        }
+
+        .upload-section.dragover {
+            border-color: #667eea;
+            background: #e3f2fd;
+        }
+
+        .file-input-wrapper {
+            position: relative;
+            display: inline-block;
+            cursor: pointer;
+            width: 100%;
+        }
+
+        .file-input {
+            display: none;
+        }
+
+        .file-input-button {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            padding: 15px 25px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 1em;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            width: 100%;
+        }
+
+        .file-input-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
+        }
+
+        .file-info {
+            margin-top: 15px;
+            padding: 12px;
+            background: #e8f5e8;
+            border-radius: 8px;
+            border-left: 4px solid #28a745;
+            display: none;
+        }
+
+        .file-info.show {
+            display: block;
+        }
+
+        .controls-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+            gap: 15px;
+            margin-bottom: 25px;
+        }
+
+        .control-btn {
+            padding: 12px 20px;
+            border: none;
+            border-radius: 8px;
+            font-size: 0.95em;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+        }
+
+        .control-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .control-btn:not(:disabled):hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+        }
+
+        .btn-start {
+            background: linear-gradient(135deg, #28a745, #20c997);
+            color: white;
+        }
+
+        .btn-pause {
+            background: linear-gradient(135deg, #ffc107, #fd7e14);
+            color: white;
+        }
+
+        .btn-stop {
+            background: linear-gradient(135deg, #dc3545, #e83e8c);
+            color: white;
+        }
+
+        .btn-skip {
+            background: linear-gradient(135deg, #6c757d, #495057);
+            color: white;
+        }
+
+        .btn-reset {
+            background: linear-gradient(135deg, #17a2b8, #007bff);
+            color: white;
+        }
+
+        .status-section {
+            background: #f8f9fa;
+            border-radius: 12px;
+            padding: 20px;
+        }
+
+        .status-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .status-item {
+            text-align: center;
+            padding: 15px;
+            background: white;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        }
+
+        .status-value {
+            font-size: 1.8em;
+            font-weight: 700;
+            margin-bottom: 5px;
+        }
+
+        .status-label {
+            font-size: 0.85em;
+            color: #6c757d;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .status-badge {
+            display: inline-block;
+            padding: 6px 12px;
+            border-radius: 20px;
+            font-size: 0.85em;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .status-idle { background: #e9ecef; color: #495057; }
+        .status-running { background: #d4edda; color: #155724; }
+        .status-paused { background: #fff3cd; color: #856404; }
+        .status-stopped { background: #f8d7da; color: #721c24; }
+        .status-completed { background: #d1ecf1; color: #0c5460; }
+        .status-error { background: #f5c6cb; color: #721c24; }
+
+        .progress-section {
+            margin-top: 20px;
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 25px;
+            background: #e9ecef;
+            border-radius: 12px;
+            overflow: hidden;
+            margin-bottom: 10px;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #28a745, #20c997);
+            transition: width 0.5s ease;
+            border-radius: 12px;
+            position: relative;
+        }
+
+        .progress-text {
+            position: absolute;
+            width: 100%;
+            text-align: center;
+            line-height: 25px;
+            font-size: 0.85em;
+            font-weight: 600;
+            color: white;
+            text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+        }
+
+        .statistics-panel {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 30px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+        }
+
+        .stat-card {
+            background: linear-gradient(135deg, #f8f9fa, #e9ecef);
+            border-radius: 12px;
+            padding: 20px;
+            text-align: center;
+            border-left: 4px solid;
+        }
+
+        .stat-card.appointments { border-left-color: #28a745; }
+        .stat-card.reschedules { border-left-color: #ffc107; }
+        .stat-card.incomplete { border-left-color: #6c757d; }
+        .stat-card.failed { border-left-color: #dc3545; }
+
+        .stat-number {
+            font-size: 2.2em;
+            font-weight: 700;
+            margin-bottom: 8px;
+        }
+
+        .stat-label {
+            font-size: 0.9em;
+            color: #6c757d;
+            font-weight: 500;
+        }
+
+        .current-call-section {
+            grid-column: 1 / -1;
+            background: #f8f9fa;
+            border-radius: 12px;
+            padding: 25px;
+            margin-top: 25px;
+        }
+
+        .current-call-info {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+
+        .info-item {
+            background: white;
+            padding: 15px;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+        }
+
+        .info-label {
+            font-size: 0.8em;
+            color: #6c757d;
+            text-transform: uppercase;
+            margin-bottom: 5px;
+        }
+
+        .info-value {
+            font-size: 1.1em;
+            font-weight: 600;
+            color: #2c3e50;
+        }
+
+        .alerts-section {
+            margin-top: 20px;
+        }
+
+        .alert {
+            padding: 12px 16px;
+            border-radius: 8px;
+            margin-bottom: 10px;
+            font-weight: 500;
+            display: none;
+        }
+
+        .alert.show {
+            display: block;
+        }
+
+        .alert-success {
+            background: #d4edda;
+            color: #155724;
+            border-left: 4px solid #28a745;
+        }
+
+        .alert-error {
+            background: #f8d7da;
+            color: #721c24;
+            border-left: 4px solid #dc3545;
+        }
+
+        .alert-warning {
+            background: #fff3cd;
+            color: #856404;
+            border-left: 4px solid #ffc107;
+        }
+
+        .alert-info {
+            background: #d1ecf1;
+            color: #0c5460;
+            border-left: 4px solid #17a2b8;
+        }
+
+        .logs-section {
+            background: #1e1e1e;
+            border-radius: 12px;
+            padding: 20px;
+            margin-top: 20px;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+
+        .log-entry {
+            color: #e9ecef;
+            font-family: 'Courier New', monospace;
+            font-size: 0.85em;
+            margin-bottom: 5px;
+            padding: 3px 0;
+        }
+
+        .log-timestamp {
+            color: #6c757d;
+        }
+
+        .log-level-info { color: #17a2b8; }
+        .log-level-warning { color: #ffc107; }
+        .log-level-error { color: #dc3545; }
+        .log-level-success { color: #28a745; }
+
+        /* Responsive Design */
+        @media (max-width: 1200px) {
+            .main-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        @media (max-width: 768px) {
+            .console-container {
+                padding: 15px;
+            }
+
+            .header h1 {
+                font-size: 2em;
+            }
+
+            .controls-grid {
+                grid-template-columns: 1fr 1fr;
+            }
+
+            .status-grid {
+                grid-template-columns: 1fr 1fr;
+            }
+
+            .stats-grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        /* Loading animations */
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            border-top-color: #fff;
+            animation: spin 1s ease-in-out infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .pulse {
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+    </style>
+</head>
+<body>
+    <div class="console-container">
+        <div class="header">
+            <h1>🎯 Aveya IVF - Call Center Console</h1>
+            <p>Automated appointment booking system with intelligent call management</p>
+        </div>
+
+        <div class="alerts-section" id="alertsSection"></div>
+
+        <div class="main-grid">
+            <!-- Control Panel -->
+            <div class="control-panel">
+                <h2 class="panel-title">🎮 Control Panel</h2>
+
+                <!-- File Upload Section -->
+                <div class="upload-section" id="uploadSection">
+                    <div class="file-input-wrapper">
+                        <input type="file" id="fileInput" class="file-input" accept=".xlsx,.xls">
+                        <button class="file-input-button" onclick="document.getElementById('fileInput').click()">
+                            📁 Upload Patient Records
+                            <span style="font-size: 0.85em; opacity: 0.8;">(Excel format)</span>
+                        </button>
+                    </div>
+                    <div class="file-info" id="fileInfo"></div>
+                </div>
+
+                <!-- Control Buttons -->
+                <div class="controls-grid">
+                    <button class="control-btn btn-start" id="startBtn" onclick="startQueue()">
+                        ▶️ Start
+                    </button>
+                    <button class="control-btn btn-pause" id="pauseBtn" onclick="pauseQueue()" disabled>
+                        ⏸️ Pause
+                    </button>
+                    <button class="control-btn btn-stop" id="stopBtn" onclick="stopQueue()" disabled>
+                        ⏹️ Stop
+                    </button>
+                    <button class="control-btn btn-skip" id="skipBtn" onclick="skipCurrent()" disabled>
+                        ⏭️ Skip
+                    </button>
+                    <button class="control-btn btn-reset" id="resetBtn" onclick="resetQueue()">
+                        🔄 Reset
+                    </button>
+                </div>
+
+                <!-- Status Section -->
+                <div class="status-section">
+                    <h3 style="margin-bottom: 15px; color: #2c3e50;">📊 Queue Status</h3>
+                    <div class="status-grid">
+                        <div class="status-item">
+                            <div class="status-value" style="color: #667eea;" id="totalRecords">0</div>
+                            <div class="status-label">Total Records</div>
+                        </div>
+                        <div class="status-item">
+                            <div class="status-value" style="color: #28a745;" id="completedCalls">0</div>
+                            <div class="status-label">Completed</div>
+                        </div>
+                        <div class="status-item">
+                            <div class="status-value" style="color: #ffc107;" id="remainingCalls">0</div>
+                            <div class="status-label">Remaining</div>
+                        </div>
+                        <div class="status-item">
+                            <span class="status-badge status-idle" id="queueStatus">IDLE</span>
+                        </div>
+                    </div>
+
+                    <!-- Progress Bar -->
+                    <div class="progress-section">
+                        <div class="progress-bar">
+                            <div class="progress-fill" id="progressFill" style="width: 0%">
+                                <div class="progress-text" id="progressText">0%</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Statistics Panel -->
+            <div class="statistics-panel">
+                <h2 class="panel-title">📈 Call Statistics</h2>
+
+                <div class="stats-grid">
+                    <div class="stat-card appointments">
+                        <div class="stat-number" style="color: #28a745;" id="appointmentsCount">0</div>
+                        <div class="stat-label">Appointments Booked</div>
+                    </div>
+                    <div class="stat-card reschedules">
+                        <div class="stat-number" style="color: #ffc107;" id="reschedulesCount">0</div>
+                        <div class="stat-label">Reschedule Requests</div>
+                    </div>
+                    <div class="stat-card incomplete">
+                        <div class="stat-number" style="color: #6c757d;" id="incompleteCount">0</div>
+                        <div class="stat-label">Incomplete Calls</div>
+                    </div>
+                    <div class="stat-card failed">
+                        <div class="stat-number" style="color: #dc3545;" id="failedCount">0</div>
+                        <div class="stat-label">Failed Calls</div>
+                    </div>
+                </div>
+
+                <!-- Current Call Info -->
+                <div class="current-call-section">
+                    <h3 style="margin-bottom: 15px; color: #2c3e50;">📞 Current Call</h3>
+                    <div class="current-call-info" id="currentCallInfo">
+                        <div class="info-item">
+                            <div class="info-label">Patient Name</div>
+                            <div class="info-value" id="currentPatientName">-</div>
+                        </div>
+                        <div class="info-item">
+                            <div class="info-label">Phone Number</div>
+                            <div class="info-value" id="currentPatientPhone">-</div>
+                        </div>
+                        <div class="info-item">
+                            <div class="info-label">Age / Gender</div>
+                            <div class="info-value" id="currentPatientInfo">-</div>
+                        </div>
+                        <div class="info-item">
+                            <div class="info-label">Address</div>
+                            <div class="info-value" id="currentPatientAddress">-</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Activity Logs -->
+        <div class="control-panel">
+            <h2 class="panel-title">📝 Activity Logs</h2>
+            <div class="logs-section" id="logsSection">
+                <div class="log-entry">
+                    <span class="log-timestamp">[2024-12-25 14:30:22]</span>
+                    <span class="log-level-info">[INFO]</span>
+                    System initialized and ready for operation
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        class CallCenterConsole {
+            constructor() {
+                this.statusUpdateInterval = null;
+                this.ws = null;
+                this.currentStatus = 'idle';
+
+                this.init();
+            }
+
+            init() {
+                // Initialize event listeners
+                document.getElementById('fileInput').addEventListener('change', this.handleFileUpload.bind(this));
+
+                // Setup drag and drop
+                const uploadSection = document.getElementById('uploadSection');
+                uploadSection.addEventListener('dragover', this.handleDragOver);
+                uploadSection.addEventListener('drop', this.handleFileDrop.bind(this));
+
+                // Start status updates
+                this.startStatusUpdates();
+                this.connectWebSocket();
+
+                // Initial status fetch
+                this.fetchStatus();
+
+                this.log('System initialized and ready for operation', 'info');
+            }
+
+            async handleFileUpload(event) {
+                const file = event.target.files[0];
+                if (file) {
+                    await this.uploadFile(file);
+                }
+            }
+
+            handleDragOver(event) {
+                event.preventDefault();
+                event.currentTarget.classList.add('dragover');
+            }
+
+            async handleFileDrop(event) {
+                event.preventDefault();
+                event.currentTarget.classList.remove('dragover');
+
+                const files = event.dataTransfer.files;
+                if (files.length > 0) {
+                    await this.uploadFile(files[0]);
+                }
+            }
+
+            async uploadFile(file) {
+                try {
+                    this.log(`Uploading file: ${file.name}`, 'info');
+                    this.showAlert('Uploading file...', 'info');
+
+                    const formData = new FormData();
+                    formData.append('file', file);
+
+                    const response = await fetch('/api/upload-records', {
+                        method: 'POST',
+                        body: formData
+                    });
+
+                    const result = await response.json();
+
+                    if (result.success) {
+                        this.showAlert(`Successfully uploaded ${result.data.total_records} records`, 'success');
+                        this.log(`File uploaded successfully: ${result.data.total_records} records loaded`, 'success');
+
+                        // Update file info
+                        const fileInfo = document.getElementById('fileInfo');
+                        fileInfo.innerHTML = `
+                            <strong>📁 ${file.name}</strong><br>
+                            📊 ${result.data.total_records} records loaded<br>
+                            🕐 ${new Date(result.data.upload_timestamp).toLocaleString()}
+                        `;
+                        fileInfo.classList.add('show');
+
+                        // Enable start button
+                        document.getElementById('startBtn').disabled = false;
+
+                        // Refresh status
+                        await this.fetchStatus();
+
+                    } else {
+                        throw new Error(result.message || 'Upload failed');
+                    }
+
+                } catch (error) {
+                    this.showAlert(`Upload failed: ${error.message}`, 'error');
+                    this.log(`Upload failed: ${error.message}`, 'error');
+                }
+            }
+
+            async startQueue() {
+                try {
+                    this.log('Starting call queue...', 'info');
+
+                    const response = await fetch('/api/queue/start', {
+                        method: 'POST'
+                    });
+
+                    const result = await response.json();
+
+                    if (result.success) {
+                        this.showAlert('Call queue started successfully', 'success');
+                        this.log('Call queue started', 'success');
+                        this.updateControlButtons('running');
+                    } else {
+                        throw new Error(result.message);
+                    }
+
+                } catch (error) {
+                    this.showAlert(`Failed to start queue: ${error.message}`, 'error');
+                    this.log(`Failed to start queue: ${error.message}`, 'error');
+                }
+            }
+
+            async pauseQueue() {
+                try {
+                    const response = await fetch('/api/queue/pause', {
+                        method: 'POST'
+                    });
+
+                    const result = await response.json();
+
+                    if (result.success) {
+                        this.showAlert('Call queue paused', 'warning');
+                        this.log('Call queue paused', 'warning');
+                        this.updateControlButtons('paused');
+                    } else {
+                        throw new Error(result.message);
+                    }
+
+                } catch (error) {
+                    this.showAlert(`Failed to pause queue: ${error.message}`, 'error');
+                    this.log(`Failed to pause queue: ${error.message}`, 'error');
+                }
+            }
+
+            async stopQueue() {
+                try {
+                    const response = await fetch('/api/queue/stop', {
+                        method: 'POST'
+                    });
+
+                    const result = await response.json();
+
+                    if (result.success) {
+                        this.showAlert('Call queue stopped', 'info');
+                        this.log('Call queue stopped', 'info');
+                        this.updateControlButtons('stopped');
+                    } else {
+                        throw new Error(result.message);
+                    }
+
+                } catch (error) {
+                    this.showAlert(`Failed to stop queue: ${error.message}`, 'error');
+                    this.log(`Failed to stop queue: ${error.message}`, 'error');
+                }
+            }
+
+            async skipCurrent() {
+                try {
+                    const response = await fetch('/api/queue/skip-current', {
+                        method: 'POST'
+                    });
+
+                    const result = await response.json();
+
+                    if (result.success) {
+                        this.showAlert('Current call skipped', 'info');
+                        this.log(`Skipped call to ${result.data.skipped_record.name}`, 'info');
+                    } else {
+                        throw new Error(result.message);
+                    }
+
+                } catch (error) {
+                    this.showAlert(`Failed to skip call: ${error.message}`, 'error');
+                    this.log(`Failed to skip call: ${error.message}`, 'error');
+                }
+            }
+
+            async resetQueue() {
+                try {
+                    const response = await fetch('/api/queue/reset', {
+                        method: 'POST'
+                    });
+
+                    const result = await response.json();
+
+                    if (result.success) {
+                        this.showAlert('Queue reset successfully', 'info');
+                        this.log('Queue reset to beginning', 'info');
+                        this.updateControlButtons('idle');
+                        await this.fetchStatus();
+                    } else {
+                        throw new Error(result.message);
+                    }
+
+                } catch (error) {
+                    this.showAlert(`Failed to reset queue: ${error.message}`, 'error');
+                    this.log(`Failed to reset queue: ${error.message}`, 'error');
+                }
+            }
+
+            async fetchStatus() {
+                try {
+                    const response = await fetch('/api/queue/status');
+                    const status = await response.json();
+
+                    this.updateStatusDisplay(status);
+
+                    // Update control buttons based on status
+                    this.updateControlButtons(status.status);
+
+                } catch (error) {
+                    console.error('Failed to fetch status:', error);
+                }
+            }
+
+            updateStatusDisplay(status) {
+                // Update status values
+                document.getElementById('totalRecords').textContent = status.total_records || 0;
+                document.getElementById('completedCalls').textContent = status.current_index || 0;
+                document.getElementById('remainingCalls').textContent = status.remaining_calls || 0;
+
+                // Update queue status badge
+                const statusBadge = document.getElementById('queueStatus');
+                statusBadge.textContent = status.status.toUpperCase();
+                statusBadge.className = `status-badge status-${status.status}`;
+
+                // Update progress bar
+                const progressFill = document.getElementById('progressFill');
+                const progressText = document.getElementById('progressText');
+                const percentage = status.progress_percentage || 0;
+
+                progressFill.style.width = `${percentage}%`;
+                progressText.textContent = `${Math.round(percentage)}%`;
+
+                // Update statistics
+                if (status.stats) {
+                    document.getElementById('appointmentsCount').textContent = status.stats.successful_appointments || 0;
+                    document.getElementById('reschedulesCount').textContent = status.stats.reschedule_requests || 0;
+                    document.getElementById('incompleteCount').textContent = status.stats.incomplete_calls || 0;
+                    document.getElementById('failedCount').textContent = status.stats.failed_calls || 0;
+                }
+
+                // Update current call info
+                if (status.current_record) {
+                    document.getElementById('currentPatientName').textContent = status.current_record.name || '-';
+                    document.getElementById('currentPatientPhone').textContent = status.current_record.phone || '-';
+                    document.getElementById('currentPatientInfo').textContent =
+                        `${status.current_record.age || '-'} / ${status.current_record.gender || '-'}`;
+                    document.getElementById('currentPatientAddress').textContent = status.current_record.address || '-';
+                } else {
+                    document.getElementById('currentPatientName').textContent = '-';
+                    document.getElementById('currentPatientPhone').textContent = '-';
+                    document.getElementById('currentPatientInfo').textContent = '-';
+                    document.getElementById('currentPatientAddress').textContent = '-';
+                }
+
+                this.currentStatus = status.status;
+            }
+
+            updateControlButtons(status) {
+                const startBtn = document.getElementById('startBtn');
+                const pauseBtn = document.getElementById('pauseBtn');
+                const stopBtn = document.getElementById('stopBtn');
+                const skipBtn = document.getElementById('skipBtn');
+                const resetBtn = document.getElementById('resetBtn');
+
+                // Reset all buttons
+                [startBtn, pauseBtn, stopBtn, skipBtn].forEach(btn => {
+                    btn.disabled = true;
+                    btn.classList.remove('pulse');
+                });
+
+                switch (status) {
+                    case 'idle':
+                        startBtn.disabled = false;
+                        resetBtn.disabled = false;
+                        break;
+                    case 'running':
+                        pauseBtn.disabled = false;
+                        stopBtn.disabled = false;
+                        skipBtn.disabled = false;
+                        pauseBtn.classList.add('pulse');
+                        break;
+                    case 'paused':
+                        startBtn.disabled = false;
+                        stopBtn.disabled = false;
+                        startBtn.innerHTML = '▶️ Resume';
+                        startBtn.onclick = () => this.resumeQueue();
+                        break;
+                    case 'stopped':
+                    case 'completed':
+                        resetBtn.disabled = false;
+                        startBtn.innerHTML = '▶️ Start';
+                        startBtn.onclick = () => this.startQueue();
+                        break;
+                }
+            }
+
+            async resumeQueue() {
+                try {
+                    const response = await fetch('/api/queue/resume', {
+                        method: 'POST'
+                    });
+
+                    const result = await response.json();
+
+                    if (result.success) {
+                        this.showAlert('Call queue resumed', 'success');
+                        this.log('Call queue resumed', 'success');
+                        this.updateControlButtons('running');
+                    } else {
+                        throw new Error(result.message);
+                    }
+
+                } catch (error) {
+                    this.showAlert(`Failed to resume queue: ${error.message}`, 'error');
+                    this.log(`Failed to resume queue: ${error.message}`, 'error');
+                }
+            }
+
+            connectWebSocket() {
+                try {
+                    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                    const wsUrl = `${protocol}//${window.location.host}/ws/queue-status`;
+
+                    this.ws = new WebSocket(wsUrl);
+
+                    this.ws.onopen = () => {
+                        this.log('WebSocket connected for real-time updates', 'info');
+                    };
+
+                    this.ws.onmessage = (event) => {
+                        const status = JSON.parse(event.data);
+                        this.updateStatusDisplay(status);
+                    };
+
+                    this.ws.onclose = () => {
+                        this.log('WebSocket disconnected', 'warning');
+                        // Attempt to reconnect after 5 seconds
+                        setTimeout(() => this.connectWebSocket(), 5000);
+                    };
+
+                } catch (error) {
+                    console.error('WebSocket connection failed:', error);
+                }
+            }
+
+            startStatusUpdates() {
+                // Fetch status every 5 seconds as backup to WebSocket
+                this.statusUpdateInterval = setInterval(() => {
+                    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+                        this.fetchStatus();
+                    }
+                }, 5000);
+            }
+
+            showAlert(message, type = 'info') {
+                const alertsSection = document.getElementById('alertsSection');
+
+                const alert = document.createElement('div');
+                alert.className = `alert alert-${type} show`;
+                alert.innerHTML = `
+                    <span>${message}</span>
+                    <button onclick="this.parentElement.remove()" style="float: right; background: none; border: none; font-size: 1.2em; cursor: pointer;">&times;</button>
+                `;
+
+                alertsSection.appendChild(alert);
+
+                // Auto-remove after 5 seconds
+                setTimeout(() => {
+                    if (alert.parentElement) {
+                        alert.remove();
+                    }
+                }, 5000);
+            }
+
+            log(message, level = 'info') {
+                const logsSection = document.getElementById('logsSection');
+                const timestamp = new Date().toLocaleString();
+
+                const logEntry = document.createElement('div');
+                logEntry.className = 'log-entry';
+                logEntry.innerHTML = `
+                    <span class="log-timestamp">[${timestamp}]</span>
+                    <span class="log-level-${level}">[${level.toUpperCase()}]</span>
+                    ${message}
+                `;
+
+                logsSection.appendChild(logEntry);
+                logsSection.scrollTop = logsSection.scrollHeight;
+
+                // Keep only last 50 log entries
+                while (logsSection.children.length > 50) {
+                    logsSection.removeChild(logsSection.firstChild);
+                }
+            }
+
+            destroy() {
+                if (this.statusUpdateInterval) {
+                    clearInterval(this.statusUpdateInterval);
+                }
+                if (this.ws) {
+                    this.ws.close();
+                }
+            }
+        }
+
+        // Global functions for button onclick handlers
+        let console = null;
+
+        function startQueue() {
+            console.startQueue();
+        }
+
+        function pauseQueue() {
+            console.pauseQueue();
+        }
+
+        function stopQueue() {
+            console.stopQueue();
+        }
+
+        function skipCurrent() {
+            console.skipCurrent();
+        }
+
+        function resetQueue() {
+            console.resetQueue();
+        }
+
+        // Initialize when page loads
+        document.addEventListener('DOMContentLoaded', () => {
+            console = new CallCenterConsole();
+        });
+
+        // Cleanup on page unload
+        window.addEventListener('beforeunload', () => {
+            if (console) {
+                console.destroy();
+            }
+        });
+    </script>
+</body>
+</html>
