@@ -61,11 +61,36 @@ This project is a FastAPI-based backend for a voice agent that integrates with P
    The server will start on the port specified in your `.env` (default: 8090).
 
 2. **Endpoints:**
-   - `GET /` — Health check endpoint.
-   - `POST /webhook` — Plivo webhook for call events.
-   - `POST /incoming-call` — Handles incoming calls and language selection.
-   - `POST /voice` — Handles DTMF input for language selection.
-   - `WebSocket /media-stream` — Streams audio between the caller and the AI.
+
+   ### Core Application
+   - `GET /` — Health check endpoint  
+   - `GET /dashboard` — Transcript dashboard interface  
+   - `GET /console` — Call center console interface  
+   - `GET /status` — System status and statistics  
+
+   ### Call Management
+   - `POST /webhook` — Plivo webhook for call events and initiation  
+   - `WebSocket /media-stream` — Audio streaming between caller and AI  
+   - `POST /hangup` — Handle call hangup requests  
+
+   ### Queue Management
+   - `POST /api/upload-records` — Upload patient records Excel file  
+   - `POST /api/queue/start` — Start the calling queue  
+   - `POST /api/queue/pause` — Pause the calling queue  
+   - `POST /api/queue/resume` — Resume paused queue  
+   - `POST /api/queue/stop` — Stop the calling queue  
+   - `POST /api/queue/reset` — Reset queue to beginning  
+   - `POST /api/queue/skip-current` — Skip current call  
+   - `GET /api/queue/status` — Get queue status and statistics  
+
+   ### Data Retrieval
+   - `GET /api/recent-calls` — Get recent call sessions  
+   - `GET /api/call-transcripts/{call_id}` — Get transcripts for specific call  
+   - `GET /appointment-details` — Get extracted appointment details  
+
+   ### WebSocket Endpoints
+   - `WebSocket /ws/transcripts` — Real-time transcript updates  
+   - `WebSocket /ws/queue-status` — Real-time queue status updates  
 
 3. **Call Flow:**
    - When a call is received, the system prompts the user to select a language.
