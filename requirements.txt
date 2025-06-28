@@ -130,7 +130,6 @@ pytesseract==0.3.13
 python-dateutil==2.9.0.post0
 python-dotenv==1.1.1
 python-multipart==0.0.20
-pywin32
 PyYAML==6.0.2
 referencing==0.36.2
 regex==2024.11.6
