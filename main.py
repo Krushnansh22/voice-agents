@@ -9,7 +9,8 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.websockets import WebSocketDisconnect
 from fastapi.staticfiles import StaticFiles
 import asyncio
-
+from pydantic import BaseModel
+from fastapi.responses import StreamingResponse
 from database.models import call_session_to_dict, transcript_entry_to_dict
 from settings import settings
 import uvicorn
@@ -28,8 +29,9 @@ import logging
 from database.db_service import db_service
 from database.websocket_manager import websocket_manager
 
-# NEW: Import CallQueueManager
-from call_queue_manager import call_queue_manager, CallResult
+# NEW: Import Google Sheets Integration
+from google_sheets_service import google_sheets_service
+from enhanced_call_queue_manager import enhanced_call_queue_manager, CallResult, QueueStatus
 
 warnings.filterwarnings("ignore")
 from dotenv import load_dotenv
@@ -39,13 +41,6 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 load_dotenv()
-
-# REMOVED: Global variables for old system
-# records = []
-# last_processed_count = 0
-# called_numbers = []
-# p_index = 0
-# call_in_progress = False
 
 # KEEP: Call management variables
 MAX_CALL_DURATION = 300  # 5 minutes in seconds
@@ -86,6 +81,17 @@ not_registered_user_msg = "Sorry, we couldn't find your registered number. If yo
 
 if not OPENAI_API_KEY:
     raise ValueError('Missing the OpenAI API key. Please set it in the .env file.')
+
+
+# Request models for Google Sheets
+class GoogleSheetConnectionRequest(BaseModel):
+    sheet_id: str
+    worksheet_name: Optional[str] = None
+
+
+class GoogleSheetResultsRequest(BaseModel):
+    results_sheet_id: str
+    worksheet_name: str = "Results"
 
 
 class CallHangupManager:
@@ -611,11 +617,11 @@ def append_incomplete_call_to_excel(patient_record, reason="call_incomplete", fi
 
 
 async def process_conversation_outcome():
-    """Process the conversation to determine outcome and save to appropriate Excel file"""
+    """Updated process conversation outcome for enhanced queue manager"""
     global call_outcome_detected, current_call_uuid
 
-    # Get current record from queue manager
-    current_record = call_queue_manager.get_current_record()
+    # Get current record from enhanced queue manager
+    current_record = enhanced_call_queue_manager.get_current_record()
     if not current_record:
         print(f"❌ No current record available for outcome processing")
         return
@@ -634,17 +640,17 @@ async def process_conversation_outcome():
     if appointment_details.get("appointment_confirmed"):
         success = append_appointment_to_excel(appointment_details, patient_record)
         if success:
-            print(f"✅ Appointment booked for {current_record.name}")
+            print(f"✅ Appointment booked for {current_record.name} (Row {current_record.row_number})")
             print(f"   Date: {appointment_details.get('appointment_date', 'TBD')}")
             print(f"   Time: {appointment_details.get('appointment_time', 'TBD')}")
 
-            # Mark in queue manager
-            await call_queue_manager.mark_call_result(
+            # Mark in enhanced queue manager
+            await enhanced_call_queue_manager.mark_call_result(
                 CallResult.APPOINTMENT_BOOKED,
                 f"Date: {appointment_details.get('appointment_date', 'TBD')}, Time: {appointment_details.get('appointment_time', 'TBD')}"
             )
 
-            call_outcome_detected = True
+            call_outcome_detected = CallResult.APPOINTMENT_BOOKED
             print("📋 Appointment confirmed - call will continue to natural ending")
         return
 
@@ -653,22 +659,21 @@ async def process_conversation_outcome():
         callback_details = extract_reschedule_details()
         success = append_reschedule_to_excel(patient_record, callback_details)
         if success:
-            print(f"📅 Reschedule request recorded for {current_record.name}")
+            print(f"📅 Reschedule request recorded for {current_record.name} (Row {current_record.row_number})")
 
-            # Mark in queue manager
+            # Mark in enhanced queue manager
             callback_info = f"Preferred: {callback_details.get('callback_day', 'TBD')} {callback_details.get('callback_time', 'TBD')}"
-            await call_queue_manager.mark_call_result(CallResult.RESCHEDULE_REQUESTED, callback_info)
+            await enhanced_call_queue_manager.mark_call_result(CallResult.RESCHEDULE_REQUESTED, callback_info)
 
-            call_outcome_detected = True
+            call_outcome_detected = CallResult.RESCHEDULE_REQUESTED
             print("📋 Reschedule detected - call will continue to natural ending")
         return
 
-    print(f"ℹ️ No clear outcome detected yet for {current_record.name}")
-
+    print(f"ℹ️ No clear outcome detected yet for {current_record.name} (Row {current_record.row_number})")
 
 
 async def terminate_call_gracefully(websocket, realtime_ai_ws, reason="completed"):
-    """Gracefully terminate call and clean up all connections"""
+    """Updated terminate call gracefully for enhanced queue manager"""
     global current_call_session, current_call_uuid, call_timer_task, call_outcome_detected
 
     try:
@@ -702,13 +707,8 @@ async def terminate_call_gracefully(websocket, realtime_ai_ws, reason="completed
             )
             print(f"✅ Call session ended in database: {current_call_session.call_id}")
 
-        # Close WebSocket (this will end the stream)
-        if websocket and not websocket.client_state.DISCONNECTED:
-            await websocket.close()
-            print("✅ WebSocket closed - Stream terminated")
-
-        # Handle call outcome with queue manager
-        current_record = call_queue_manager.get_current_record()
+        # Handle call outcome with enhanced queue manager
+        current_record = enhanced_call_queue_manager.get_current_record()
         if current_record:
             if not call_outcome_detected:
                 # Mark as incomplete if no outcome was detected
@@ -720,8 +720,8 @@ async def terminate_call_gracefully(websocket, realtime_ai_ws, reason="completed
                 else:
                     reason_detail = "call_incomplete"
 
-                # Complete the call in queue manager
-                await call_queue_manager.complete_current_call(CallResult.CALL_INCOMPLETE, reason_detail)
+                # Complete the call in enhanced queue manager
+                await enhanced_call_queue_manager.complete_current_call(CallResult.CALL_INCOMPLETE, reason_detail)
 
                 # Still save to Excel for backward compatibility
                 patient_record = {
@@ -733,8 +733,17 @@ async def terminate_call_gracefully(websocket, realtime_ai_ws, reason="completed
                 }
                 append_incomplete_call_to_excel(patient_record, reason_detail)
             else:
-                # Call had a successful outcome, queue manager already updated
+                # Call had a successful outcome, just complete it
                 print(f"✅ Call completed successfully with outcome detected")
+
+                # Check if queue is stopping
+                if enhanced_call_queue_manager._stop_after_current_call or enhanced_call_queue_manager._should_stop:
+                    print("🛑 Queue is stopping - not moving to next record")
+                    current_record.status = call_outcome_detected
+                    enhanced_call_queue_manager._call_in_progress = False
+                else:
+                    # Normal completion - move to next
+                    await enhanced_call_queue_manager.move_to_next_record()
 
         # Reset global flags
         current_call_session = None
@@ -751,20 +760,20 @@ async def terminate_call_gracefully(websocket, realtime_ai_ws, reason="completed
         current_call_uuid = None
         call_outcome_detected = False
 
-        # Still complete the call in queue manager
-        if call_queue_manager.get_current_record():
-            await call_queue_manager.complete_current_call(CallResult.CALL_FAILED, f"Error: {str(e)}")
+        # Still complete the call in enhanced queue manager
+        if enhanced_call_queue_manager.get_current_record():
+            await enhanced_call_queue_manager.complete_current_call(CallResult.CALL_FAILED, f"Error: {str(e)}")
 
 
 async def controlled_make_call():
-    """Make a call for the current record in queue"""
-    current_record = call_queue_manager.get_current_record()
+    """Updated make call function for enhanced queue manager"""
+    current_record = enhanced_call_queue_manager.get_current_record()
 
     if not current_record:
         print("❌ No current record to call")
         return False
 
-    if call_queue_manager.status.value != "running":
+    if enhanced_call_queue_manager.status.value != "running":
         print("❌ Queue is not running")
         return False
 
@@ -774,16 +783,18 @@ async def controlled_make_call():
             response = await client.post(f"{settings.HOST_URL}/webhook")
 
         if response.status_code == 200:
-            print(f"✅ Call initiated for {current_record.name} ({current_record.phone})")
+            print(
+                f"✅ Call initiated for {current_record.name} ({current_record.phone}) from row {current_record.row_number}")
             return True
         else:
             print(f"❌ Webhook failed - Status: {response.status_code}")
-            await call_queue_manager.mark_call_result(CallResult.CALL_FAILED, f"Webhook failed: {response.status_code}")
+            await enhanced_call_queue_manager.mark_call_result(CallResult.CALL_FAILED,
+                                                               f"Webhook failed: {response.status_code}")
             return False
 
     except Exception as e:
         print(f"❌ Failed to make call: {e}")
-        await call_queue_manager.mark_call_result(CallResult.CALL_FAILED, str(e))
+        await enhanced_call_queue_manager.mark_call_result(CallResult.CALL_FAILED, str(e))
         return False
 
 
@@ -834,29 +845,23 @@ async def dashboard():
         return HTMLResponse(content=file.read())
 
 
-# NEW: Queue Control API Endpoints
-@app.post("/api/upload-records")
-async def upload_patient_records(file: UploadFile = File(...)):
-    """Upload Excel file with patient records"""
+# NEW: Google Sheets API Endpoints
+@app.post("/api/connect-google-sheet")
+async def connect_google_sheet(request: GoogleSheetConnectionRequest):
+    """Connect to Google Sheet and load patient records"""
     try:
-        # Validate file type
-        if not file.filename.endswith(('.xlsx', '.xls')):
-            raise HTTPException(status_code=400, detail="Only Excel files (.xlsx, .xls) are supported")
+        logger.info(f"Connecting to Google Sheet: {request.sheet_id}")
 
-        # Read file content
-        file_content = await file.read()
-
-        if len(file_content) == 0:
-            raise HTTPException(status_code=400, detail="Empty file uploaded")
-
-        # Process with CallQueueManager
-        result = await call_queue_manager.upload_records(file_content, file.filename)
+        result = await enhanced_call_queue_manager.connect_to_google_sheet(
+            sheet_id=request.sheet_id,
+            worksheet_name=request.worksheet_name
+        )
 
         if result["success"]:
-            logger.info(f"Successfully uploaded {result['total_records']} records from {file.filename}")
+            logger.info(f"Successfully connected to sheet with {result['total_records']} records")
             return {
                 "success": True,
-                "message": f"Successfully uploaded {result['total_records']} records",
+                "message": f"Successfully connected to Google Sheet with {result['total_records']} records",
                 "data": result
             }
         else:
@@ -865,20 +870,84 @@ async def upload_patient_records(file: UploadFile = File(...)):
     except HTTPException:
         raise
     except Exception as e:
-        logger.error(f"Failed to upload records: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to process file: {str(e)}")
+        logger.error(f"Failed to connect to Google Sheet: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to connect to sheet: {str(e)}")
 
 
+@app.post("/api/test-google-sheet")
+async def test_google_sheet_connection(request: GoogleSheetConnectionRequest):
+    """Test connection to Google Sheet without loading records"""
+    try:
+        # Initialize Google Sheets service if not already done
+        if not google_sheets_service.client:
+            initialized = await google_sheets_service.initialize()
+            if not initialized:
+                raise HTTPException(status_code=500, detail="Failed to initialize Google Sheets service")
+
+        # Test connection
+        connection_result = await google_sheets_service.connect_to_sheet(
+            request.sheet_id,
+            request.worksheet_name
+        )
+
+        if connection_result["success"]:
+            # Get basic info without loading all records
+            return {
+                "success": True,
+                "message": "Successfully connected to Google Sheet",
+                "data": {
+                    "sheet_id": request.sheet_id,
+                    "worksheet_name": connection_result.get("worksheet_name"),
+                    "total_rows": connection_result.get("total_rows", 0),
+                    "data_rows": connection_result.get("data_rows", 0),
+                    "accessible": True
+                }
+            }
+        else:
+            raise HTTPException(status_code=400, detail=connection_result["error"])
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to test Google Sheet connection: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/google-sheets-status")
+async def get_google_sheets_status():
+    """Get current Google Sheets service status"""
+    try:
+        status = google_sheets_service.get_status()
+        return JSONResponse(content=status)
+
+    except Exception as e:
+        logger.error(f"Failed to get Google Sheets status: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/queue/records-summary")
+async def get_records_summary():
+    """Get detailed summary of all records and their statuses"""
+    try:
+        summary = await enhanced_call_queue_manager.get_records_summary()
+        return JSONResponse(content=summary)
+
+    except Exception as e:
+        logger.error(f"Failed to get records summary: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# Updated Queue Control API Endpoints
 @app.post("/api/queue/start")
 async def start_call_queue():
-    """Start the calling queue"""
+    """Start the calling queue with Google Sheets monitoring"""
     try:
-        result = await call_queue_manager.start_queue()
+        result = await enhanced_call_queue_manager.start_queue()
 
         if result["success"]:
             return {
                 "success": True,
-                "message": "Call queue started successfully",
+                "message": "Call queue started with Google Sheets monitoring",
                 "data": result
             }
         else:
@@ -893,14 +962,14 @@ async def start_call_queue():
 
 @app.post("/api/queue/pause")
 async def pause_call_queue():
-    """Pause the calling queue"""
+    """Pause the calling queue (keeps Google Sheets monitoring active)"""
     try:
-        result = await call_queue_manager.pause_queue()
+        result = await enhanced_call_queue_manager.pause_queue()
 
         if result["success"]:
             return {
                 "success": True,
-                "message": "Call queue paused",
+                "message": "Call queue paused (Google Sheets monitoring continues)",
                 "data": {"status": result["status"]}
             }
         else:
@@ -915,7 +984,7 @@ async def pause_call_queue():
 async def resume_call_queue():
     """Resume the paused calling queue"""
     try:
-        result = await call_queue_manager.resume_queue()
+        result = await enhanced_call_queue_manager.resume_queue()
 
         if result["success"]:
             return {
@@ -933,13 +1002,13 @@ async def resume_call_queue():
 
 @app.post("/api/queue/stop")
 async def stop_call_queue():
-    """Stop the calling queue"""
+    """Stop the calling queue and Google Sheets monitoring"""
     try:
-        result = await call_queue_manager.stop_queue()
+        result = await enhanced_call_queue_manager.stop_queue()
 
         return {
             "success": True,
-            "message": "Call queue stopped",
+            "message": "Call queue and Google Sheets monitoring stopped",
             "data": result
         }
 
@@ -950,9 +1019,9 @@ async def stop_call_queue():
 
 @app.post("/api/queue/reset")
 async def reset_call_queue():
-    """Reset the calling queue to start from beginning"""
+    """Reset the calling queue"""
     try:
-        result = await call_queue_manager.reset_queue()
+        result = await enhanced_call_queue_manager.reset_queue()
 
         if result["success"]:
             return {
@@ -972,7 +1041,7 @@ async def reset_call_queue():
 async def skip_current_call():
     """Skip the current call and move to next"""
     try:
-        result = await call_queue_manager.skip_current_call()
+        result = await enhanced_call_queue_manager.skip_current_call()
 
         if result["success"]:
             return {
@@ -990,9 +1059,9 @@ async def skip_current_call():
 
 @app.get("/api/queue/status")
 async def get_queue_status():
-    """Get current queue status and statistics"""
+    """Get current queue status with Google Sheets information"""
     try:
-        status = call_queue_manager.get_status()
+        status = enhanced_call_queue_manager.get_status()
         return JSONResponse(content=status)
 
     except Exception as e:
@@ -1072,7 +1141,7 @@ async def queue_status_websocket(websocket: WebSocket):
     try:
         while True:
             # Send current status every 2 seconds
-            status = call_queue_manager.get_status()
+            status = enhanced_call_queue_manager.get_status()
             await websocket.send_json(status)
             await asyncio.sleep(2)
 
@@ -1091,63 +1160,117 @@ async def get_appointment_details():
 
 @app.api_route("/webhook", methods=["GET", "POST"])
 async def webhook_handler(request: Request):
-    """Modified webhook handler for controlled calling"""
+    """Updated webhook handler for Google Sheets integration"""
     global current_call_uuid
 
     if request.method == "POST":
         print(f"📨 Webhook POST request received!")
 
-        # Get current record from queue manager
-        current_record = call_queue_manager.get_current_record()
+        # Check if queue is stopped or stopping
+        if enhanced_call_queue_manager.status in [QueueStatus.STOPPED, QueueStatus.COMPLETED]:
+            print(f"🛑 Queue is {enhanced_call_queue_manager.status.value} - rejecting webhook call")
+            return {"status": "rejected", "reason": f"Queue is {enhanced_call_queue_manager.status.value}"}
 
-        if current_record:
+        if enhanced_call_queue_manager._should_stop or enhanced_call_queue_manager._stop_after_current_call:
+            print(f"🛑 Queue stop requested - rejecting webhook call")
+            return {"status": "rejected", "reason": "Queue stop requested"}
+
+        # Get current record from enhanced queue manager
+        current_record = enhanced_call_queue_manager.get_current_record()
+
+        if current_record and current_record.status == CallResult.PENDING:
             phone_number = current_record.phone
             name = current_record.name
+            row_number = current_record.row_number
 
             try:
-                call_made = plivo_client.calls.create(
+                print(f"📞 Attempting Plivo call to {phone_number} ({name}) from Google Sheets row {row_number}")
+
+                # Make Plivo call
+                call_response = plivo_client.calls.create(
                     from_=settings.PLIVO_FROM_NUMBER,
                     to_=phone_number,
                     answer_url=settings.PLIVO_ANSWER_XML,
                     answer_method='GET'
                 )
 
-                print(f"📞 Plivo call initiated to {phone_number} ({name})")
+                call_uuid = call_response.call_uuid if hasattr(call_response, 'call_uuid') else getattr(call_response,
+                                                                                                        'message_uuid',
+                                                                                                        'unknown')
+
+                print(f"✅ Plivo call initiated successfully to {phone_number} ({name}) from row {row_number}")
+                print(f"📞 Call UUID: {call_uuid}")
 
                 # Mark record as calling
                 current_record.status = CallResult.CALLING
                 current_record.last_attempt = datetime.now()
                 current_record.attempts += 1
 
-                return {"status": "success", "called": phone_number, "record_index": current_record.index}
+                return {
+                    "status": "success",
+                    "called": phone_number,
+                    "record_index": current_record.index,
+                    "call_uuid": call_uuid,
+                    "google_sheet_row": row_number
+                }
 
             except Exception as e:
                 print(f"❌ Plivo call failed: {e}")
 
                 # Mark as failed
-                await call_queue_manager.mark_call_result(CallResult.CALL_FAILED, str(e))
-                await call_queue_manager.move_to_next_record()
+                current_record.status = CallResult.CALL_FAILED
+                current_record.result_details = str(e)
+                current_record.last_attempt = datetime.now()
+                current_record.attempts += 1
+
+                # Update statistics
+                enhanced_call_queue_manager.stats["total_calls"] += 1
+                enhanced_call_queue_manager.stats["failed_calls"] += 1
 
                 return {"status": "error", "message": str(e)}
         else:
-            print(f"❌ No current record available in queue")
-            return {"status": "error", "message": "No current record in queue"}
+            # Check why no valid record
+            if not current_record:
+                print(
+                    f"❌ No current record available (index: {enhanced_call_queue_manager.current_index}, total: {enhanced_call_queue_manager.total_records})")
+            else:
+                print(f"❌ Current record status is {current_record.status.value}, expected PENDING")
+
+            return {"status": "error", "message": "No valid current record in queue"}
 
     else:
         # GET request - Call event from Plivo
         query_params = dict(request.query_params)
 
-        # Extract important call information
         call_uuid = query_params.get('CallUUID')
         call_status = query_params.get('CallStatus')
         event = query_params.get('Event')
 
         print(f"📨 Webhook GET request received! Call UUID: {call_uuid}, Status: {call_status}, Event: {event}")
 
-        # Store the UUID globally for later use
         if call_uuid:
             current_call_uuid = call_uuid
             print(f"💾 Stored current Call UUID: {current_call_uuid}")
+
+        # Handle call events
+        if event == "StartApp" and call_status == "in-progress":
+            print(f"📞 Call started successfully: {call_uuid}")
+
+        elif event == "Hangup" or call_status in ["completed", "failed", "busy", "no-answer"]:
+            print(f"📞 Call ended: {call_uuid}, Status: {call_status}")
+
+            current_record = enhanced_call_queue_manager.get_current_record()
+            if current_record and current_record.status == CallResult.CALLING:
+                if call_status == "completed":
+                    asyncio.create_task(enhanced_call_queue_manager.complete_current_call(
+                        CallResult.CALL_INCOMPLETE,
+                        f"Call completed - {call_status}"
+                    ))
+                else:
+                    asyncio.create_task(enhanced_call_queue_manager.complete_current_call(
+                        CallResult.CALL_FAILED,
+                        f"Call failed - {call_status}"
+                    ))
 
         # Return XML response for Plivo
         xml_data = f'''<?xml version="1.0" encoding="UTF-8"?>
@@ -1163,9 +1286,11 @@ async def webhook_handler(request: Request):
 @app.get("/status")
 async def get_status():
     """Get current system status"""
-    queue_status = call_queue_manager.get_status()
+    queue_status = enhanced_call_queue_manager.get_status()
+    sheets_status = google_sheets_service.get_status()
     return {
         "queue_status": queue_status,
+        "google_sheets_status": sheets_status,
         "server_status": "running",
         "timestamp": datetime.now().isoformat()
     }
@@ -1193,7 +1318,7 @@ async def get_call_transcripts(call_id: str):
 
 @app.websocket("/media-stream")
 async def handle_media_stream(websocket: WebSocket):
-    """Handle WebSocket connections between Twilio and OpenAI."""
+    """Complete media stream handler for enhanced queue manager"""
     global conversation_transcript, current_call_session, call_start_time, call_outcome_detected
 
     await websocket.accept()
@@ -1203,14 +1328,15 @@ async def handle_media_stream(websocket: WebSocket):
     call_outcome_detected = False
     conversation_transcript = []
 
-    # Get current record from queue manager
-    current_record = call_queue_manager.get_current_record()
+    # Get current record from enhanced queue manager
+    current_record = enhanced_call_queue_manager.get_current_record()
 
     if current_record:
         patient_record = {
             "name": current_record.name,
             "phone_number": current_record.phone
         }
+        print(f"📞 Starting call stream for {current_record.name} (Row {current_record.row_number})")
     else:
         patient_record = {"name": "Unknown", "phone_number": "Unknown"}
 
@@ -1361,7 +1487,7 @@ async def handle_media_stream(websocket: WebSocket):
                                 'आप बताइए कि कब',
                                 'tentative slot hold कर लेती हूँ',
                                 'partner से पूछना है',
-                                'जी, बिल्कुल। आप मुझे उसी नंबर पर वापस बंकर सकते हैं जिससे कॉल आई है। धन्यवाद!'
+                                'जी, बिल्कुल। आप मुझे उसी नंबर पर वापस कॉल कर सकते हैं जिससे कॉल आई है। धन्यवाद!'
                             ]
 
                             if any(re.search(trigger, transcript, re.IGNORECASE) for trigger in appointment_triggers):
@@ -1424,8 +1550,7 @@ async def handle_media_stream(websocket: WebSocket):
             if mark_queue and response_start_timestamp_twilio is not None:
                 elapsed_time = latest_media_timestamp - response_start_timestamp_twilio
                 if SHOW_TIMING_MATH:
-                    print(
-                        f"Calculating elapsed time for truncation: {latest_media_timestamp} - {response_start_timestamp_twilio} = {elapsed_time}ms")
+                    print(f"Calculating elapsed time for truncation: {latest_media_timestamp} - {response_start_timestamp_twilio} = {elapsed_time}ms")
 
                 if last_assistant_item:
                     if SHOW_TIMING_MATH:
@@ -1464,7 +1589,7 @@ async def handle_media_stream(websocket: WebSocket):
 async def send_initial_conversation_item(realtime_ai_ws, user_details=None):
     """Send initial conversation item if AI talks first with personalized greeting."""
     # Get current record for personalized greeting
-    current_record = call_queue_manager.get_current_record()
+    current_record = enhanced_call_queue_manager.get_current_record()
     greeting_name = current_record.name if current_record else "there"
 
     # Directly send the greeting message (not instructions for the AI to generate one)
@@ -1486,7 +1611,7 @@ async def send_initial_conversation_item(realtime_ai_ws, user_details=None):
 async def initialize_session(realtime_ai_ws, user_details=None):
     """Control initial session with OpenAI."""
     # Get current record for personalized conversation
-    current_record = call_queue_manager.get_current_record()
+    current_record = enhanced_call_queue_manager.get_current_record()
 
     if current_record:
         patient_info = f"You are talking to {current_record.name}, a {current_record.age} years old {current_record.gender}."
@@ -1590,6 +1715,207 @@ IMPORTANT BEHAVIOR:
     await send_initial_conversation_item(realtime_ai_ws, user_details)
 
 
+# Add these missing endpoints to your FastAPI app
+
+# 1. Missing endpoint for getting all records with pagination
+@app.get("/api/queue/records")
+async def get_all_records(page: int = 1, limit: int = 50):
+    """Get all records with pagination"""
+    try:
+        if not enhanced_call_queue_manager.records:
+            return JSONResponse({
+                "records": [],
+                "total": 0,
+                "page": page,
+                "total_pages": 0
+            })
+
+        start_idx = (page - 1) * limit
+        end_idx = start_idx + limit
+
+        records_slice = enhanced_call_queue_manager.records[start_idx:end_idx]
+        total_records = len(enhanced_call_queue_manager.records)
+        total_pages = (total_records + limit - 1) // limit
+
+        return JSONResponse({
+            "records": [record.to_dict() for record in records_slice],
+            "total": total_records,
+            "page": page,
+            "total_pages": total_pages,
+            "has_next": page < total_pages,
+            "has_prev": page > 1
+        })
+    except Exception as e:
+        logger.error(f"Failed to get records: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# 2. Missing endpoint for updating individual record status
+@app.post("/api/queue/records/{record_index}/update-status")
+async def update_record_status(record_index: int, status: str, details: str = None):
+    """Update status of a specific record"""
+    try:
+        if record_index < 0 or record_index >= len(enhanced_call_queue_manager.records):
+            raise HTTPException(status_code=404, detail="Record not found")
+
+        record = enhanced_call_queue_manager.records[record_index]
+
+        # Validate status
+        valid_statuses = [status.value for status in CallResult]
+        if status not in valid_statuses:
+            raise HTTPException(status_code=400, detail=f"Invalid status. Must be one of: {valid_statuses}")
+
+        # Update record
+        record.status = CallResult(status)
+        record.result_details = details
+        record.last_attempt = datetime.now()
+
+        return JSONResponse({
+            "success": True,
+            "message": f"Record {record_index} status updated to {status}",
+            "record": record.to_dict()
+        })
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to update record status: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# 3. Missing endpoint for exporting records to Excel/CSV
+@app.get("/api/queue/export")
+async def export_records(format: str = "excel"):
+    """Export all records to Excel or CSV format"""
+    try:
+        import io
+
+        if not enhanced_call_queue_manager.records:
+            raise HTTPException(status_code=404, detail="No records to export")
+
+        # Create DataFrame
+        import pandas as pd
+
+        records_data = []
+        for record in enhanced_call_queue_manager.records:
+            record_dict = record.to_dict()
+            records_data.append(record_dict)
+
+        df = pd.DataFrame(records_data)
+
+        if format.lower() == "excel":
+            # Create Excel file in memory
+            output = io.BytesIO()
+            with pd.ExcelWriter(output, engine='openpyxl') as writer:
+                df.to_excel(writer, sheet_name='Call Records', index=False)
+            output.seek(0)
+
+            return StreamingResponse(
+                io.BytesIO(output.read()),
+                media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                headers={"Content-Disposition": "attachment; filename=call_records.xlsx"}
+            )
+
+        elif format.lower() == "csv":
+            # Create CSV file in memory
+            output = io.StringIO()
+            df.to_csv(output, index=False)
+            output.seek(0)
+
+            return StreamingResponse(
+                io.StringIO(output.getvalue()),
+                media_type="text/csv",
+                headers={"Content-Disposition": "attachment; filename=call_records.csv"}
+            )
+
+        else:
+            raise HTTPException(status_code=400, detail="Format must be 'excel' or 'csv'")
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to export records: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# 4. Missing endpoint for queue statistics
+@app.get("/api/queue/statistics")
+async def get_detailed_statistics():
+    """Get detailed queue statistics and analytics"""
+    try:
+        stats = enhanced_call_queue_manager.get_status()
+
+        # Add additional analytics
+        if enhanced_call_queue_manager.records:
+            # Calculate success rate
+            total_attempted = len([r for r in enhanced_call_queue_manager.records if r.status != CallResult.PENDING])
+            successful = len([r for r in enhanced_call_queue_manager.records if
+                              r.status in [CallResult.APPOINTMENT_BOOKED, CallResult.RESCHEDULE_REQUESTED]])
+
+            success_rate = (successful / total_attempted * 100) if total_attempted > 0 else 0
+
+            # Status distribution
+            status_distribution = {}
+            for record in enhanced_call_queue_manager.records:
+                status = record.status.value
+                status_distribution[status] = status_distribution.get(status, 0) + 1
+
+            # Average call duration (mock calculation - you'd implement actual tracking)
+            avg_call_duration = 180  # seconds
+
+            enhanced_stats = {
+                **stats,
+                "analytics": {
+                    "success_rate": round(success_rate, 2),
+                    "total_attempted": total_attempted,
+                    "status_distribution": status_distribution,
+                    "average_call_duration": avg_call_duration,
+                    "efficiency_score": round(
+                        success_rate * 0.7 + (total_attempted / len(enhanced_call_queue_manager.records) * 100) * 0.3,
+                        2) if enhanced_call_queue_manager.records else 0
+                }
+            }
+
+            return JSONResponse(enhanced_stats)
+
+        return JSONResponse(stats)
+
+    except Exception as e:
+        logger.error(f"Failed to get statistics: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# 5. Missing endpoint for manual retry of failed calls
+@app.post("/api/queue/retry-failed")
+async def retry_failed_calls():
+    """Reset all failed calls to pending status for retry"""
+    try:
+        if enhanced_call_queue_manager.status == QueueStatus.RUNNING:
+            raise HTTPException(status_code=400, detail="Cannot retry while queue is running")
+
+        retry_count = 0
+        for record in enhanced_call_queue_manager.records:
+            if record.status == CallResult.CALL_FAILED:
+                record.status = CallResult.PENDING
+                record.result_details = None
+                retry_count += 1
+
+        return JSONResponse({
+            "success": True,
+            "message": f"Reset {retry_count} failed calls to pending status",
+            "retry_count": retry_count
+        })
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to retry failed calls: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# 6. Missing imports for the export functionality
+
+
+
 @app.post("/hangup")
 async def hangup_endpoint(request: Request):
     """Endpoint to handle call hangup requests"""
@@ -1616,31 +1942,39 @@ async def hangup_endpoint(request: Request):
 
 @app.on_event("startup")
 async def startup_event():
-    """Modified startup - no auto-calling"""
+    """Updated startup with Google Sheets integration"""
     # Database connection
     connected = await db_service.connect()
     if not connected:
         raise RuntimeError("Failed to connect to MongoDB")
     print("✅ Application started with MongoDB connection")
 
-    # Initialize queue manager
-    print("🎯 Call Queue Manager initialized")
+    # Initialize Google Sheets service
+    sheets_initialized = await google_sheets_service.initialize()
+    if sheets_initialized:
+        print("✅ Google Sheets service initialized")
+    else:
+        print("⚠️ Google Sheets service failed to initialize - check credentials.json")
+
+    print("🎯 Enhanced Call Queue Manager with Google Sheets initialized")
     print("🌐 Call Center Console ready - access at /console")
     print("📊 Transcript Dashboard available at /dashboard")
-    print("⚡ Upload Excel files and start calls manually via console")
+    print("📋 Enter Google Sheet ID in console to start automated calls")
 
 
 @app.on_event("shutdown")
 async def shutdown_event():
-    """Close database connection on shutdown"""
+    """Close database connection and cleanup on shutdown"""
     await db_service.disconnect()
+    await google_sheets_service.stop_monitoring()
 
 
 def main():
-    print("🚀 Starting Aveya IVF Voice Assistant Server...")
+    print("🚀 Starting Aveya IVF Voice Assistant Server with Google Sheets Integration...")
     print("📊 Dashboard: http://localhost:8090/dashboard")
     print("🎮 Console: http://localhost:8090/console")
     print("🔗 API Status: http://localhost:8090/status")
+    print("📋 Google Sheets Integration: Connect via console")
     uvicorn.run(app, host="0.0.0.0", port=settings.PORT)
 
 

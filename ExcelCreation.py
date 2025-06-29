@@ -22,10 +22,10 @@ for col_num, header in enumerate(headers, start=1):
 
 ##CHNAGE PHONE NUMBER HERE and run
 sample_data = [
-    ["Aarav Mehta", "+918459673277", "24 MG Road, Bengaluru", 28, "Male"],
+    ["Shravani Shelke", "+919049865451", "24 MG Road, Bengaluru", 28, "Male"],
     ["Vanshika panjwani", "+919049865451", "24 MG Road, Bengaluru", 28, "Male"],
-    ["Vanshika panjwani", "+919049865451", "24 MG Road, Bengaluru", 28, "Male"],
-     ["Vanshika panjwani", "+919049865451", "24 MG Road, Bengaluru", 28, "Male"],
+    ["Epshita Ninawe", "+919049865451", "24 MG Road, Bengaluru", 28, "Male"],
+     ["Anushka Desai", "+919049865451", "24 MG Road, Bengaluru", 28, "Male"],
 ]
 
 # Insert each row into the worksheet
