@@ -65,6 +65,8 @@ conversation_transcript = []
 
 # Global variable to store current call session
 current_call_session = None
+# Global variable to store single call patient info
+single_call_patient_info = None
 
 plivo_client = plivo.RestClient(settings.PLIVO_AUTH_ID, settings.PLIVO_AUTH_TOKEN)
 
@@ -754,6 +756,16 @@ async def terminate_call_gracefully(websocket, realtime_ai_ws, reason="completed
         call_outcome_detected = False
         conversation_transcript.clear()
 
+        # Reset queue manager state
+        call_queue_manager._call_in_progress = False
+        call_queue_manager.records = []
+        call_queue_manager.current_index = 0
+        call_queue_manager.total_records = 0
+
+         # Clear single call patient info
+        global single_call_patient_info
+        single_call_patient_info = None
+
         print(f"🎯 Call termination completed successfully. Reason: {reason}")
 
     except Exception as e:
@@ -1099,24 +1111,38 @@ async def get_appointment_details():
     details = extract_appointment_details()
     return JSONResponse(details)
 
+# Replace your existing webhook_handler function with this updated version
 @app.api_route("/webhook", methods=["GET", "POST"])
 async def webhook_handler(request: Request):
-    """COMPLETELY FIXED webhook handler for controlled calling"""
+    """FIXED webhook handler for both queue and single calls"""
     global current_call_uuid
 
     if request.method == "POST":
         print(f"📨 Webhook POST request received!")
 
-        # CRITICAL: Check if queue is stopped or stopping
-        if call_queue_manager.status in [QueueStatus.STOPPED, QueueStatus.COMPLETED]:
+        # CRITICAL: Check if queue is stopped or stopping (but allow single calls)
+        if call_queue_manager.status in [QueueStatus.STOPPED, QueueStatus.COMPLETED] and not single_call_patient_info:
             print(f"🛑 Queue is {call_queue_manager.status.value} - rejecting webhook call")
             return {"status": "rejected", "reason": f"Queue is {call_queue_manager.status.value}"}
 
-        if call_queue_manager._should_stop or call_queue_manager._stop_after_current_call:
+        if (call_queue_manager._should_stop or call_queue_manager._stop_after_current_call) and not single_call_patient_info:
             print(f"🛑 Queue stop requested - rejecting webhook call")
             return {"status": "rejected", "reason": "Queue stop requested"}
 
-        # Get current record from queue manager
+        # Check if this is a single call
+        if single_call_patient_info:
+            print(f"📞 Processing single call webhook for {single_call_patient_info['name']}")
+            
+            # For single calls, we don't use Plivo here - call was already made in the API
+            # Just return success to allow the media stream to connect
+            return {
+                "status": "success", 
+                "called": single_call_patient_info['phone_number'], 
+                "patient_name": single_call_patient_info['name'],
+                "call_type": "single_call"
+            }
+
+        # Get current record from queue manager (existing queue logic)
         current_record = call_queue_manager.get_current_record()
 
         if current_record and current_record.status == CallResult.PENDING:
@@ -1199,20 +1225,25 @@ async def webhook_handler(request: Request):
         elif event == "Hangup" or call_status in ["completed", "failed", "busy", "no-answer"]:
             print(f"📞 Call ended: {call_uuid}, Status: {call_status}")
             
-            # Find the current record and mark it as completed based on status
-            current_record = call_queue_manager.get_current_record()
-            if current_record and current_record.status == CallResult.CALLING:
-                if call_status == "completed":
-                    # You can set this to whatever result you want based on your business logic
-                    asyncio.create_task(call_queue_manager.complete_current_call(
-                        CallResult.CALL_INCOMPLETE, 
-                        f"Call completed - {call_status}"
-                    ))
-                else:
-                    asyncio.create_task(call_queue_manager.complete_current_call(
-                        CallResult.CALL_FAILED, 
-                        f"Call failed - {call_status}"
-                    ))
+            # Handle single calls vs queue calls differently
+            if single_call_patient_info:
+                print(f"📞 Single call ended: {call_uuid}")
+                # For single calls, the termination will be handled by the media stream
+            else:
+                # Find the current record and mark it as completed based on status
+                current_record = call_queue_manager.get_current_record()
+                if current_record and current_record.status == CallResult.CALLING:
+                    if call_status == "completed":
+                        # You can set this to whatever result you want based on your business logic
+                        asyncio.create_task(call_queue_manager.complete_current_call(
+                            CallResult.CALL_INCOMPLETE, 
+                            f"Call completed - {call_status}"
+                        ))
+                    else:
+                        asyncio.create_task(call_queue_manager.complete_current_call(
+                            CallResult.CALL_FAILED, 
+                            f"Call failed - {call_status}"
+                        ))
 
         # Return XML response for Plivo
         xml_data = f'''<?xml version="1.0" encoding="UTF-8"?>
@@ -1255,6 +1286,170 @@ async def get_call_transcripts(call_id: str):
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
+@app.post("/api/single-call")
+async def initiate_single_call(
+    phone_number: str,
+    name: str, 
+    age: str,
+    gender: str,
+    address: str = ""
+):
+    """Initiate a single call with provided patient parameters"""
+    try:
+        # Validate phone number format (basic validation)
+        if not phone_number or len(phone_number) < 10:
+            raise HTTPException(status_code=400, detail="Valid phone number required")
+        
+        # Validate required fields
+        if not name or not age or not gender:
+            raise HTTPException(status_code=400, detail="Name, age, and gender are required")
+
+        # Check if queue is currently running or if there's a call in progress
+        if call_queue_manager._call_in_progress:
+            raise HTTPException(
+                status_code=409, 
+                detail="Another call is currently in progress. Please wait for it to complete."
+            )
+
+        # Create a temporary CallRecord for this single call
+        from call_queue_manager import CallRecord, CallResult
+        
+        single_call_record = CallRecord(
+            index=0,  # Single call doesn't need index
+            name=name,
+            phone=phone_number,
+            address=address,
+            age=age,
+            gender=gender
+        )
+        # Set status after creation
+        single_call_record.status = CallResult.PENDING
+
+        # Set this as the current record in queue manager
+        call_queue_manager.records = [single_call_record]
+        call_queue_manager.current_index = 0
+        call_queue_manager.total_records = 1
+        call_queue_manager._call_in_progress = True
+
+        logger.info(f"📞 Single call request: {name} ({phone_number})")
+
+        try:
+            # Create Plivo call
+            call_response = plivo_client.calls.create(
+                from_=settings.PLIVO_FROM_NUMBER,
+                to_=phone_number,
+                answer_url=settings.PLIVO_ANSWER_XML,
+                answer_method='GET'
+            )
+
+            # Get call UUID
+            call_uuid = getattr(call_response, 'call_uuid', 'unknown')
+            
+            # Update record status
+            single_call_record.status = CallResult.CALLING
+            single_call_record.last_attempt = datetime.now()
+            single_call_record.attempts += 1
+
+            # Store call UUID globally for hangup management
+            global current_call_uuid
+            current_call_uuid = call_uuid
+
+            # Create call session in database for single call
+            try:
+                from database.db_service import db_service
+                call_session = await db_service.create_call_session(
+                    patient_name=name,
+                    patient_phone=phone_number
+                )
+                logger.info(f"✅ Created call session in DB: {call_session.call_id}")
+                
+                # Store additional patient info in a global variable for the media stream handler
+                global single_call_patient_info
+                single_call_patient_info = {
+                    "name": name,
+                    "phone_number": phone_number,
+                    "age": age,
+                    "gender": gender,
+                    "address": address,
+                    "call_session_id": call_session.call_id
+                }
+                
+            except Exception as db_error:
+                logger.error(f"⚠️ Failed to create call session in DB: {db_error}")
+                # Continue anyway - don't fail the call for DB issues
+
+            logger.info(f"✅ Single call initiated successfully")
+            logger.info(f"   Patient: {name}")
+            logger.info(f"   Phone: {phone_number}")
+            logger.info(f"   Call UUID: {call_uuid}")
+
+            return {
+                "status": "success",
+                "message": "Call initiated successfully",
+                "data": {
+                    "call_uuid": call_uuid,
+                    "patient_name": name,
+                    "patient_phone": phone_number,
+                    "patient_age": age,
+                    "patient_gender": gender,
+                    "patient_address": address,
+                    "call_status": "initiated",
+                    "timestamp": datetime.now().isoformat()
+                }
+            }
+
+        except Exception as plivo_error:
+            logger.error(f"❌ Plivo call failed: {plivo_error}")
+            
+            # Reset call in progress flag on failure
+            call_queue_manager._call_in_progress = False
+            single_call_record.status = CallResult.CALL_FAILED
+            single_call_record.result_details = str(plivo_error)
+
+            raise HTTPException(
+                status_code=500, 
+                detail=f"Failed to initiate call: {str(plivo_error)}"
+            )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Error in single call API: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+# Add this helper endpoint to get current call status
+@app.get("/api/single-call/status")
+async def get_single_call_status():
+    """Get status of current single call"""
+    try:
+        current_record = call_queue_manager.get_current_record()
+        
+        if not current_record:
+            return {
+                "status": "no_active_call",
+                "message": "No active call in progress"
+            }
+
+        return {
+            "status": "active_call",
+            "data": {
+                "patient_name": current_record.name,
+                "patient_phone": current_record.phone,
+                "patient_age": current_record.age,
+                "patient_gender": current_record.gender,
+                "patient_address": current_record.address,
+                "call_status": current_record.status.value,
+                "attempts": current_record.attempts,
+                "last_attempt": current_record.last_attempt.isoformat() if current_record.last_attempt else None,
+                "result_details": current_record.result_details
+            }
+        }
+
+    except Exception as e:
+        logger.error(f"Error getting single call status: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.websocket("/media-stream")
 async def handle_media_stream(websocket: WebSocket):
@@ -1268,22 +1463,44 @@ async def handle_media_stream(websocket: WebSocket):
     call_outcome_detected = False
     conversation_transcript = []
 
-    # Get current record from queue manager
-    current_record = call_queue_manager.get_current_record()
-
-    if current_record:
-        patient_record = {
-            "name": current_record.name,
-            "phone_number": current_record.phone
-        }
+    # Check if this is a single call or queue call
+    if single_call_patient_info:
+        # Use single call patient info
+        patient_record = single_call_patient_info.copy()
+        logger.info(f"📞 Using single call patient info: {patient_record['name']}")
+        
+        # Create call session if not already created
+        if not current_call_session:
+            current_call_session = await db_service.create_call_session(
+                patient_name=patient_record["name"],
+                patient_phone=patient_record["phone_number"]
+            )
     else:
-        patient_record = {"name": "Unknown", "phone_number": "Unknown"}
+        # Get current record from queue manager (existing logic)
+        current_record = call_queue_manager.get_current_record()
 
-    # Create new call session in MongoDB
-    current_call_session = await db_service.create_call_session(
-        patient_name=patient_record.get("name", "Unknown"),
-        patient_phone=patient_record.get("phone_number", "Unknown")
-    )
+        if current_record:
+            patient_record = {
+                "name": current_record.name,
+                "phone_number": current_record.phone,
+                "address": current_record.address,
+                "age": current_record.age,
+                "gender": current_record.gender
+            }
+        else:
+            patient_record = {
+                "name": "Unknown", 
+                "phone_number": "Unknown",
+                "address": "",
+                "age": "",
+                "gender": ""
+            }
+
+        # Create new call session in MongoDB for queue calls
+        current_call_session = await db_service.create_call_session(
+            patient_name=patient_record.get("name", "Unknown"),
+            patient_phone=patient_record.get("phone_number", "Unknown")
+        )
 
     # Broadcast call started status
     await websocket_manager.broadcast_call_status(
@@ -1529,8 +1746,15 @@ async def handle_media_stream(websocket: WebSocket):
 async def send_initial_conversation_item(realtime_ai_ws, user_details=None):
     """Send initial conversation item if AI talks first with personalized greeting."""
     # Get current record for personalized greeting
-    current_record = call_queue_manager.get_current_record()
-    greeting_name = current_record.name if current_record else "there"
+    global single_call_patient_info
+
+    # Check if this is a single call or queue call for greeting name
+    if single_call_patient_info:
+        greeting_name = single_call_patient_info['name']
+    else:
+        # Get current record for personalized greeting
+        current_record = call_queue_manager.get_current_record()
+        greeting_name = current_record.name if current_record else "there"
 
     # Directly send the greeting message (not instructions for the AI to generate one)
     initial_conversation_item = {
@@ -1551,12 +1775,23 @@ async def send_initial_conversation_item(realtime_ai_ws, user_details=None):
 async def initialize_session(realtime_ai_ws, user_details=None):
     """Control initial session with OpenAI."""
     # Get current record for personalized conversation
-    current_record = call_queue_manager.get_current_record()
+    global single_call_patient_info
 
-    if current_record:
-        patient_info = f"You are talking to {current_record.name}, a {current_record.age} years old {current_record.gender}."
+    # Check if this is a single call or queue call
+    if single_call_patient_info:
+        # Use single call patient info
+        patient_info = f"You are talking to {single_call_patient_info['name']}, a {single_call_patient_info['age']} years old {single_call_patient_info['gender']}."
+        greeting_name = single_call_patient_info['name']
     else:
-        patient_info = "Patient information not available."
+        # Get current record for personalized conversation (existing logic)
+        current_record = call_queue_manager.get_current_record()
+
+        if current_record:
+            patient_info = f"You are talking to {current_record.name}, a {current_record.age} years old {current_record.gender}."
+            greeting_name = current_record.name
+        else:
+            patient_info = "Patient information not available."
+            greeting_name = "there"
 
     session_update = {
         "type": "session.update",
@@ -1586,7 +1821,7 @@ STYLE: Use simple Hindi with natural English words where commonly used in daily 
 CONVERSATION FLOW:
 
 OPENING:
-"नमस्ते {current_record.name if current_record else "आप"}, मैं Ritika बोल रही हूँ Aveya IVF – Rajouri Garden से। आप कैसे हैं आज?"
+"नमस्ते {greeting_name}, मैं Ritika बोल रही हूँ Aveya IVF – Rajouri Garden से। आप कैसे हैं आज?"
 (रुकें, जवाब का इंतज़ार करें और जवाब acknowledge करें)
 "अच्छा सुनकर अच्छा लगा "
 "हमें हाल ही में एक फॉर्म मिला था – जिसमें fertility को लेकर थोड़ी clarity माँगी गई थी। शायद आपने या आपके किसी family member ने भरा हो। क्या आपको थोड़ा याद आ रहा है?"
