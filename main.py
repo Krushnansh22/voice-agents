@@ -76,7 +76,7 @@ OPENAI_API_ENDPOINT = settings.AZURE_OPENAI_API_ENDPOINT_P
 SYSTEM_MESSAGE = (
     "You are a helpful and Medical assistant"
 )
-VOICE = 'sage'
+VOICE = 'coral'
 LOG_EVENT_TYPES = [
     'error', 'response.content.done', 'rate_limits.updated',
     'response.done', 'input_audio_buffer.committed',
@@ -89,7 +89,6 @@ not_registered_user_msg = "Sorry, we couldn't find your registered number. If yo
 
 if not OPENAI_API_KEY:
     raise ValueError('Missing the OpenAI API key. Please set it in the .env file.')
-
 
 class CallHangupManager:
     """Manages automatic call hangup after successful outcomes"""
@@ -1131,8 +1130,8 @@ async def webhook_handler(request: Request):
 
         # Check if this is a single call
         if single_call_patient_info:
-            print(f"📞 Processing single call webhook for {single_call_patient_info['name']}")
-            
+            print(f"📞 Processed single call webhook for {single_call_patient_info['name']}")
+            call_queue_manager._call_in_progress=False
             # For single calls, we don't use Plivo here - call was already made in the API
             # Just return success to allow the media stream to connect
             return {
@@ -1806,9 +1805,17 @@ async def initialize_session(realtime_ai_ws, user_details=None):
             "voice": VOICE,
             # Updated AI Instructions
             "instructions": f'''AI ROLE: Female fertility counselor "Ritika" from Aveya IVF – Rajouri Garden
+VOICE & TONE GUIDANCE:
+- Use a conversational pace - not too fast, allow natural pauses
+- Express emotions naturally - concern, understanding, encouragement
+- Maintain professional warmth throughout the conversation
+- Use slight variations in tone to show engagement and interest
+- When discussing sensitive topics, lower your tone slightly to show respect
+- Sound confident but not pushy when suggesting appointments
+-sound more like a human and very confident
+""" VOICE STYLE: शांत, इंसान-जैसा, हेल्पफुल और धीरे-धीरे अपॉइंटमेंट की ओर गाइड करने वाला """
 SCRIPT: Devanagari for Hindi, English for English words.
 LANGUAGE: Use a natural mix of Hindi and English — speak in conversational Hinglish (60% Hindi + 40% English).
-VOICE STYLE: शांत, इंसान-जैसा, हेल्पफुल और धीरे-धीरे अपॉइंटमेंट की ओर गाइड करने वाला
 STYLE: Use simple Hindi with natural English words where commonly used in daily speech. Empathetic, professional, and supportive.
 
 {patient_info}
