@@ -706,7 +706,9 @@ async def terminate_call_gracefully(websocket, realtime_ai_ws, reason="completed
                 status="ended"
             )
             print(f"✅ Call session ended in database: {current_call_session.call_id}")
-
+        if websocket and not websocket.client_state.DISCONNECTED:
+            await websocket.close()
+            print("✅ WebSocket closed - Stream terminated")
         # Handle call outcome with enhanced queue manager
         current_record = enhanced_call_queue_manager.get_current_record()
         if current_record:
