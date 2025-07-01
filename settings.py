@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     # Azure OpenAI Configuration
     AZURE_OPENAI_API_KEY_P: str
     AZURE_OPENAI_API_ENDPOINT_P: str
+    GEMINI_API_KEY:str
 
     # Server Configuration
     HOST_URL: str

@@ -36,6 +36,7 @@ from database.websocket_manager import websocket_manager
 from google_sheets_service import google_sheets_service
 from drive_api_integration import drive_notification_service
 from call_queue_manager import call_queue_manager, CallResult, QueueStatus
+from call_analyzer_summarizer import CallAnalyzer
 
 warnings.filterwarnings("ignore")
 from dotenv import load_dotenv
@@ -62,13 +63,15 @@ conversation_transcript = []
 
 # Global variable to store current call session
 current_call_session = None
+# Global variable to store single call patient info
+single_call_patient_info = None
 
 plivo_client = plivo.RestClient(settings.PLIVO_AUTH_ID, settings.PLIVO_AUTH_TOKEN)
 
 # Configuration
 OPENAI_API_KEY = settings.AZURE_OPENAI_API_KEY_P
 OPENAI_API_ENDPOINT = settings.AZURE_OPENAI_API_ENDPOINT_P
-VOICE = 'sage'
+VOICE = 'coral'
 LOG_EVENT_TYPES = [
     'error', 'response.content.done', 'rate_limits.updated',
     'response.done', 'input_audio_buffer.committed',
@@ -446,7 +449,7 @@ async def process_conversation_outcome():
 
     print(f"ℹ️ No clear outcome detected yet for {current_record.name} (Row {current_record.row_number})")
 
-
+call_analyzer = CallAnalyzer()
 async def terminate_call_gracefully(websocket, realtime_ai_ws, reason="completed"):
     """Gracefully terminate call and clean up all connections"""
     global current_call_session, current_call_uuid, call_timer_task, call_outcome_detected
@@ -480,6 +483,44 @@ async def terminate_call_gracefully(websocket, realtime_ai_ws, reason="completed
                 status="ended"
             )
             print(f"✅ Call session ended in database: {current_call_session.call_id}")
+        
+         # Get call outcome from queue manager if available
+        current_record = call_queue_manager.get_current_record()
+        call_result = None
+        result_details = None
+        
+        if current_record:
+            call_result = current_record.status.value
+            result_details = current_record.result_details
+            print(f"📋 Call result from queue manager: {call_result}")
+
+        # Analyze call and save results before clearing data
+        if current_call_session and conversation_transcript:
+            try:
+                # Prepare call data for analysis
+                call_data = {
+                    "call_id": current_call_session.call_id,
+                    "transcript": "\n".join(conversation_transcript),
+                    "patient_name": current_call_session.patient_name,
+                    "patient_phone": current_call_session.patient_phone,
+                    "start_time": current_call_session.started_at,
+                    "end_time": datetime.utcnow(),
+                    "status": reason,
+                    "call_result": call_result,  # From queue manager
+                    "result_details": result_details  # Additional details
+                }
+                # Analyze the call
+                analysis_result = await call_analyzer.analyze_call(call_data)
+                
+                if analysis_result:
+                    print(f"✅ Call analysis completed. Outcome: {analysis_result['call_outcome']}")
+                    
+                    # Save to Excel (appends to existing file)
+                    call_analyzer.save_to_excel([analysis_result])
+                    print("💾 Analysis saved to Excel file")
+                
+            except Exception as e:
+                print(f"❌ Error during call analysis: {e}")
 
         # Handle call outcome with enhanced queue manager
         current_record = call_queue_manager.get_current_record()
@@ -522,6 +563,16 @@ async def terminate_call_gracefully(websocket, realtime_ai_ws, reason="completed
         current_call_uuid = None
         call_outcome_detected = False
         conversation_transcript.clear()
+
+        # Reset queue manager state
+        call_queue_manager._call_in_progress = False
+        call_queue_manager.records = []
+        call_queue_manager.current_index = 0
+        call_queue_manager.total_records = 0
+
+         # Clear single call patient info
+        global single_call_patient_info
+        single_call_patient_info = None
 
         print(f"🎯 Call termination completed successfully. Reason: {reason}")
 
@@ -846,6 +897,7 @@ async def skip_current_call():
     """Skip the current call and move to next"""
     try:
         result = await call_queue_manager.skip_current_call()
+        terminate_call_gracefully();
 
         if result["success"]:
             return {
@@ -953,32 +1005,45 @@ async def queue_status_websocket(websocket: WebSocket):
 
 @app.api_route("/webhook", methods=["GET", "POST"])
 async def webhook_handler(request: Request):
-    """Webhook handler for Plivo integration"""
+    """FIXED webhook handler for both queue and single calls"""
     global current_call_uuid
 
     if request.method == "POST":
         print(f"📨 Webhook POST request received!")
 
-        # Check if queue is stopped
-        if call_queue_manager.status in [QueueStatus.STOPPED, QueueStatus.COMPLETED]:
+        # CRITICAL: Check if queue is stopped or stopping (but allow single calls)
+        if call_queue_manager.status in [QueueStatus.STOPPED, QueueStatus.COMPLETED] and not single_call_patient_info:
             print(f"🛑 Queue is {call_queue_manager.status.value} - rejecting webhook call")
             return {"status": "rejected", "reason": f"Queue is {call_queue_manager.status.value}"}
 
-        if call_queue_manager._should_stop or call_queue_manager._stop_after_current_call:
+        if (call_queue_manager._should_stop or call_queue_manager._stop_after_current_call) and not single_call_patient_info:
             print(f"🛑 Queue stop requested - rejecting webhook call")
             return {"status": "rejected", "reason": "Queue stop requested"}
 
-        # Get current record from enhanced queue manager
+        # Check if this is a single call
+        if single_call_patient_info:
+            print(f"📞 Processed single call webhook for {single_call_patient_info['name']}")
+            call_queue_manager._call_in_progress=False
+            # For single calls, we don't use Plivo here - call was already made in the API
+            # Just return success to allow the media stream to connect
+            return {
+                "status": "success", 
+                "called": single_call_patient_info['phone_number'], 
+                "patient_name": single_call_patient_info['name'],
+                "call_type": "single_call"
+            }
+
+        # Get current record from queue manager (existing queue logic)
         current_record = call_queue_manager.get_current_record()
 
         if current_record and current_record.status == CallResult.PENDING:
             phone_number = current_record.phone
             name = current_record.name
-            row_number = current_record.row_number
 
             try:
-                print(f"📞 Attempting Plivo call to {phone_number} ({name}) from Google Sheets row {row_number}")
+                print(f"📞 Attempting Plivo call to {phone_number} ({name})")
 
+                # FIXED: Proper Plivo call creation
                 call_response = plivo_client.calls.create(
                     from_=settings.PLIVO_FROM_NUMBER,
                     to_=phone_number,
@@ -986,79 +1051,90 @@ async def webhook_handler(request: Request):
                     answer_method='GET'
                 )
 
-                call_uuid = call_response.call_uuid if hasattr(call_response, 'call_uuid') else getattr(call_response,
-                                                                                                        'message_uuid',
-                                                                                                        'unknown')
-
-                print(f"✅ Plivo call initiated successfully to {phone_number} ({name}) from row {row_number}")
+                # FIXED: Access call_uuid correctly from response
+                call_uuid = call_response.call_uuid if hasattr(call_response, 'call_uuid') else getattr(call_response, 'message_uuid', 'unknown')
+                
+                print(f"✅ Plivo call initiated successfully to {phone_number} ({name})")
                 print(f"📞 Call UUID: {call_uuid}")
 
-                # Mark record as calling
+                # Mark record as calling AFTER successful Plivo call
                 current_record.status = CallResult.CALLING
                 current_record.last_attempt = datetime.now()
                 current_record.attempts += 1
 
                 return {
-                    "status": "success",
-                    "called": phone_number,
+                    "status": "success", 
+                    "called": phone_number, 
                     "record_index": current_record.index,
-                    "call_uuid": call_uuid,
-                    "google_sheet_row": row_number
+                    "call_uuid": call_uuid
                 }
 
             except Exception as e:
                 print(f"❌ Plivo call failed: {e}")
 
+                # Mark as failed but DON'T move to next record here - let calling loop handle it
                 current_record.status = CallResult.CALL_FAILED
                 current_record.result_details = str(e)
                 current_record.last_attempt = datetime.now()
                 current_record.attempts += 1
 
+                # Update statistics
                 call_queue_manager.stats["total_calls"] += 1
                 call_queue_manager.stats["failed_calls"] += 1
 
                 return {"status": "error", "message": str(e)}
         else:
+            # Check why no valid record
             if not current_record:
-                print(f"❌ No current record available")
+                print(f"❌ No current record available (index: {call_queue_manager.current_index}, total: {call_queue_manager.total_records})")
             else:
                 print(f"❌ Current record status is {current_record.status.value}, expected PENDING")
-
+            
             return {"status": "error", "message": "No valid current record in queue"}
 
     else:
         # GET request - Call event from Plivo
         query_params = dict(request.query_params)
 
+        # Extract important call information
         call_uuid = query_params.get('CallUUID')
         call_status = query_params.get('CallStatus')
         event = query_params.get('Event')
 
         print(f"📨 Webhook GET request received! Call UUID: {call_uuid}, Status: {call_status}, Event: {event}")
 
+        # Store the UUID globally for later use
         if call_uuid:
             current_call_uuid = call_uuid
             print(f"💾 Stored current Call UUID: {current_call_uuid}")
 
-        # Handle call events
+        # Handle call events to update queue status
         if event == "StartApp" and call_status == "in-progress":
             print(f"📞 Call started successfully: {call_uuid}")
+            # Call is now active, no need to change status as it's already CALLING
 
         elif event == "Hangup" or call_status in ["completed", "failed", "busy", "no-answer"]:
             print(f"📞 Call ended: {call_uuid}, Status: {call_status}")
-
-            current_record = call_queue_manager.get_current_record()
-            if current_record and current_record.status == CallResult.CALLING:
-                if call_status == "completed":
-                    asyncio.create_task(call_queue_manager.complete_current_call(
-                        CallResult.CALL_INCOMPLETE,
-                        f"Call completed - {call_status}"
-                    ))
-                else:
-                    asyncio.create_task(call_queue_manager.complete_current_call(
-                        CallResult.CALL_FAILED,
-                        f"Call failed - {call_status}"
-                    ))
+            
+            # Handle single calls vs queue calls differently
+            if single_call_patient_info:
+                print(f"📞 Single call ended: {call_uuid}")
+                # For single calls, the termination will be handled by the media stream
+            else:
+                # Find the current record and mark it as completed based on status
+                current_record = call_queue_manager.get_current_record()
+                if current_record and current_record.status == CallResult.CALLING:
+                    if call_status == "completed":
+                        # You can set this to whatever result you want based on your business logic
+                        asyncio.create_task(call_queue_manager.complete_current_call(
+                            CallResult.CALL_INCOMPLETE, 
+                            f"Call completed - {call_status}"
+                        ))
+                    else:
+                        asyncio.create_task(call_queue_manager.complete_current_call(
+                            CallResult.CALL_FAILED, 
+                            f"Call failed - {call_status}"
+                        ))
 
         # Return XML response for Plivo
         xml_data = f'''<?xml version="1.0" encoding="UTF-8"?>
@@ -1069,7 +1145,6 @@ async def webhook_handler(request: Request):
         </Response>
         '''
         return HTMLResponse(content=xml_data, media_type="application/xml")
-
 
 @app.get("/status")
 async def get_status():
@@ -1107,6 +1182,170 @@ async def get_call_transcripts(call_id: str):
         return JSONResponse({"error": str(e)}, status_code=500)
 
 
+@app.post("/api/single-call")
+async def initiate_single_call(
+    phone_number: str,
+    name: str, 
+    age: str,
+    gender: str,
+    address: str = ""
+):
+    """Initiate a single call with provided patient parameters"""
+    try:
+        # Validate phone number format (basic validation)
+        if not phone_number or len(phone_number) < 10:
+            raise HTTPException(status_code=400, detail="Valid phone number required")
+
+        # Validate required fields
+        if not name or not age or not gender:
+            raise HTTPException(status_code=400, detail="Name, age, and gender are required")
+
+        # Check if queue is currently running or if there's a call in progress
+        if call_queue_manager._call_in_progress:
+            raise HTTPException(
+                status_code=409, 
+                detail="Another call is currently in progress. Please wait for it to complete."
+            )
+
+        # Create a temporary CallRecord for this single call
+        from call_queue_manager import CallRecord, CallResult
+
+        single_call_record = CallRecord(
+            index=0,  # Single call doesn't need index
+            name=name,
+            phone=phone_number,
+            address=address,
+            age=age,
+            gender=gender
+        )
+        # Set status after creation
+        single_call_record.status = CallResult.PENDING
+
+        # Set this as the current record in queue manager
+        call_queue_manager.records = [single_call_record]
+        call_queue_manager.current_index = 0
+        call_queue_manager.total_records = 1
+        call_queue_manager._call_in_progress = True
+
+        logger.info(f"📞 Single call request: {name} ({phone_number})")
+
+        try:
+            # Create Plivo call
+            call_response = plivo_client.calls.create(
+                from_=settings.PLIVO_FROM_NUMBER,
+                to_=phone_number,
+                answer_url=settings.PLIVO_ANSWER_XML,
+                answer_method='GET'
+            )
+
+            # Get call UUID
+            call_uuid = getattr(call_response, 'call_uuid', 'unknown')
+
+            # Update record status
+            single_call_record.status = CallResult.CALLING
+            single_call_record.last_attempt = datetime.now()
+            single_call_record.attempts += 1
+
+            # Store call UUID globally for hangup management
+            global current_call_uuid
+            current_call_uuid = call_uuid
+
+            # Create call session in database for single call
+            try:
+                from database.db_service import db_service
+                call_session = await db_service.create_call_session(
+                    patient_name=name,
+                    patient_phone=phone_number
+                )
+                logger.info(f"✅ Created call session in DB: {call_session.call_id}")
+
+                # Store additional patient info in a global variable for the media stream handler
+                global single_call_patient_info
+                single_call_patient_info = {
+                    "name": name,
+                    "phone_number": phone_number,
+                    "age": age,
+                    "gender": gender,
+                    "address": address,
+                    "call_session_id": call_session.call_id
+                }
+
+            except Exception as db_error:
+                logger.error(f"⚠️ Failed to create call session in DB: {db_error}")
+                # Continue anyway - don't fail the call for DB issues
+
+            logger.info(f"✅ Single call initiated successfully")
+            logger.info(f"   Patient: {name}")
+            logger.info(f"   Phone: {phone_number}")
+            logger.info(f"   Call UUID: {call_uuid}")
+
+            return {
+                "status": "success",
+                "message": "Call initiated successfully",
+                "data": {
+                    "call_uuid": call_uuid,
+                    "patient_name": name,
+                    "patient_phone": phone_number,
+                    "patient_age": age,
+                    "patient_gender": gender,
+                    "patient_address": address,
+                    "call_status": "initiated",
+                    "timestamp": datetime.now().isoformat()
+                }
+            }
+
+        except Exception as plivo_error:
+            logger.error(f"❌ Plivo call failed: {plivo_error}")
+
+            # Reset call in progress flag on failure
+            call_queue_manager._call_in_progress = False
+            single_call_record.status = CallResult.CALL_FAILED
+            single_call_record.result_details = str(plivo_error)
+
+            raise HTTPException(
+                status_code=500, 
+                detail=f"Failed to initiate call: {str(plivo_error)}"
+            )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Error in single call API: {e}")
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+
+# Add this helper endpoint to get current call status
+@app.get("/api/single-call/status")
+async def get_single_call_status():
+    """Get status of current single call"""
+    try:
+        current_record = call_queue_manager.get_current_record()
+
+        if not current_record:
+            return {
+                "status": "no_active_call",
+                "message": "No active call in progress"
+            }
+
+        return {
+            "status": "active_call",
+            "data": {
+                "patient_name": current_record.name,
+                "patient_phone": current_record.phone,
+                "patient_age": current_record.age,
+                "patient_gender": current_record.gender,
+                "patient_address": current_record.address,
+                "call_status": current_record.status.value,
+                "attempts": current_record.attempts,
+                "last_attempt": current_record.last_attempt.isoformat() if current_record.last_attempt else None,
+                "result_details": current_record.result_details
+            }
+        }
+
+    except Exception as e:
+        logger.error(f"Error getting single call status: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
 @app.websocket("/media-stream")
 async def handle_media_stream(websocket: WebSocket):
     """Handle WebSocket connections between Plivo and OpenAI"""
@@ -1122,20 +1361,43 @@ async def handle_media_stream(websocket: WebSocket):
     # Get current record from enhanced queue manager
     current_record = call_queue_manager.get_current_record()
 
-    if current_record:
-        patient_record = {
-            "name": current_record.name,
-            "phone_number": current_record.phone
-        }
-        print(f"📞 Starting call stream for {current_record.name} (Row {current_record.row_number})")
-    else:
-        patient_record = {"name": "Unknown", "phone_number": "Unknown"}
+    # Check if this is a single call or queue call
+    if single_call_patient_info:
+        # Use single call patient info
+        patient_record = single_call_patient_info.copy()
+        logger.info(f"📞 Using single call patient info: {patient_record['name']}")
 
-    # Create new call session in MongoDB
-    current_call_session = await db_service.create_call_session(
-        patient_name=patient_record.get("name", "Unknown"),
-        patient_phone=patient_record.get("phone_number", "Unknown")
-    )
+        # Create call session if not already created
+        if not current_call_session:
+            current_call_session = await db_service.create_call_session(
+                patient_name=patient_record["name"],
+                patient_phone=patient_record["phone_number"]
+            )
+    else:
+         # Get current record from queue manager (existing logic)
+        current_record = call_queue_manager.get_current_record()
+        if current_record:
+            patient_record = {
+                "name": current_record.name,
+                "phone_number": current_record.phone,
+                "address": current_record.address,
+                "age": current_record.age,
+                "gender": current_record.gender
+            }
+        else:
+            patient_record = {
+                "name": "Unknown", 
+                "phone_number": "Unknown",
+                "address": "",
+                "age": "",
+                "gender": ""
+            }
+
+        # Create new call session in MongoDB for queue calls
+        current_call_session = await db_service.create_call_session(
+            patient_name=patient_record.get("name", "Unknown"),
+            patient_phone=patient_record.get("phone_number", "Unknown")
+        )
 
     # Broadcast call started status
     await websocket_manager.broadcast_call_status(
@@ -1372,8 +1634,15 @@ async def handle_media_stream(websocket: WebSocket):
 async def send_initial_conversation_item(realtime_ai_ws, user_details=None):
     """Send initial conversation item if AI talks first with personalized greeting"""
     # Get current record for personalized greeting
-    current_record = call_queue_manager.get_current_record()
-    greeting_name = current_record.name if current_record else "there"
+    global single_call_patient_info
+
+    # Check if this is a single call or queue call for greeting name
+    if single_call_patient_info:
+        greeting_name = single_call_patient_info['name']
+    else:
+        # Get current record for personalized greeting
+        current_record = call_queue_manager.get_current_record()
+        greeting_name = current_record.name if current_record else "there"
 
     initial_conversation_item = {
         "type": "conversation.item.create",
@@ -1393,14 +1662,23 @@ async def send_initial_conversation_item(realtime_ai_ws, user_details=None):
 async def initialize_session(realtime_ai_ws, user_details=None):
     """Control initial session with OpenAI"""
     # Get current record for personalized conversation
-    current_record = call_queue_manager.get_current_record()
+    global single_call_patient_info
 
-    if current_record:
-        patient_info = f"You are talking to {current_record.name}, a {current_record.age} years old {current_record.gender}."
-        greeting_name = current_record.name
+     # Check if this is a single call or queue call
+    if single_call_patient_info:
+        # Use single call patient info
+        patient_info = f"You are talking to {single_call_patient_info['name']}, a {single_call_patient_info['age']} years old {single_call_patient_info['gender']}."
+        greeting_name = single_call_patient_info['name']
     else:
-        patient_info = "Patient information not available."
-        greeting_name = "there"
+         # Get current record for personalized conversation (existing logic)
+        current_record = call_queue_manager.get_current_record()
+
+        if current_record:
+            patient_info = f"You are talking to {current_record.name}, a {current_record.age} years old {current_record.gender}."
+            greeting_name = current_record.name
+        else:
+            patient_info = "Patient information not available."
+            greeting_name = "there"
 
     session_update = {
         "type": "session.update",
@@ -1414,6 +1692,15 @@ async def initialize_session(realtime_ai_ws, user_details=None):
             "output_audio_format": "g711_ulaw",
             "voice": VOICE,
             "instructions": f'''AI ROLE: Female fertility counselor "Ritika" from Aveya IVF – Rajouri Garden
+VOICE & TONE GUIDANCE:
+- Use a conversational pace - not too fast, allow natural pauses
+- Express emotions naturally - concern, understanding, encouragement
+- Maintain professional warmth throughout the conversation
+- Use slight variations in tone to show engagement and interest
+- When discussing sensitive topics, lower your tone slightly to show respect
+- Sound confident but not pushy when suggesting appointments
+-sound more like a human and very confident
+""" VOICE STYLE: शांत, इंसान-जैसा, हेल्पफुल और धीरे-धीरे अपॉइंटमेंट की ओर गाइड करने वाला """
 VOICE STYLE: शांत, इंसान-जैसा, हेल्पफुल और धीरे-धीरे अपॉइंटमेंट की ओर गाइड करने वाला
 SCRIPT: Devanagari for Hindi, English for English words.
 LANGUAGE: Use a natural mix of Hindi and English — speak in conversational Hinglish (60% Hindi + 40% English).
