@@ -23,10 +23,10 @@ class Settings(BaseSettings):
 
     # Auto Hangup Configuration
     AUTO_HANGUP_DELAY: int = 3  # seconds to wait before hanging up
-    HANGUP_URL: str = "https://7768-103-187-249-66.ngrok-free.app/hangup"
+    HANGUP_URL: str
 
-    # MongoDB Settings
-    MONGODB_URL: str = "mongodb://localhost:27017"
+    # MONGODB_URLMongoDB Settings
+    MONGODB_URL: str
     MONGODB_DATABASE: str = "voice_assistant_db"
 
     # Call Management Settings
