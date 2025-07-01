@@ -75,6 +75,100 @@
             gap: 10px;
         }
 
+        /* Google Sheets Connection Section */
+        .sheets-section {
+            margin-bottom: 30px;
+            padding: 25px;
+            background: #f8f9fa;
+            border-radius: 12px;
+            border: 2px solid #dee2e6;
+            transition: all 0.3s ease;
+        }
+
+        .sheets-section.connected {
+            border-color: #28a745;
+            background: #d4edda;
+        }
+
+        .sheet-input-group {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 15px;
+        }
+
+        .sheet-id-input {
+            flex: 1;
+            padding: 12px 16px;
+            border: 2px solid #dee2e6;
+            border-radius: 8px;
+            font-size: 1em;
+            font-family: 'Courier New', monospace;
+            background: white;
+            transition: border-color 0.3s ease;
+        }
+
+        .sheet-id-input:focus {
+            outline: none;
+            border-color: #667eea;
+            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
+        }
+
+        .sheet-connect-btn {
+            padding: 12px 20px;
+            background: linear-gradient(135deg, #28a745, #20c997);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 1em;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .sheet-connect-btn:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 15px rgba(40, 167, 69, 0.4);
+        }
+
+        .sheet-connect-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .sheet-info {
+            margin-top: 15px;
+            padding: 12px;
+            background: #e8f5e8;
+            border-radius: 8px;
+            border-left: 4px solid #28a745;
+            display: none;
+        }
+
+        .sheet-info.show {
+            display: block;
+        }
+
+        .sheet-help {
+            font-size: 0.9em;
+            color: #6c757d;
+            margin-top: 10px;
+            padding: 10px;
+            background: #f1f3f4;
+            border-radius: 6px;
+        }
+
+        .sheet-help a {
+            color: #667eea;
+            text-decoration: none;
+        }
+
+        .sheet-help a:hover {
+            text-decoration: underline;
+        }
+
         .upload-section {
             margin-bottom: 30px;
             padding: 25px;
@@ -82,11 +176,11 @@
             border-radius: 12px;
             border: 2px dashed #dee2e6;
             transition: all 0.3s ease;
+            display: none; /* Hidden by default, shown when no sheet connected */
         }
 
-        .upload-section.dragover {
-            border-color: #667eea;
-            background: #e3f2fd;
+        .upload-section.show {
+            display: block;
         }
 
         .file-input-wrapper {
@@ -188,6 +282,11 @@
 
         .btn-reset {
             background: linear-gradient(135deg, #17a2b8, #007bff);
+            color: white;
+        }
+
+        .btn-disconnect {
+            background: linear-gradient(135deg, #6c757d, #495057);
             color: white;
         }
 
@@ -415,6 +514,31 @@
         .log-level-error { color: #dc3545; }
         .log-level-success { color: #28a745; }
 
+        /* Loading animations */
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid rgba(255, 255, 255, 0.3);
+            border-radius: 50%;
+            border-top-color: #fff;
+            animation: spin 1s ease-in-out infinite;
+        }
+
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+
+        .pulse {
+            animation: pulse 2s infinite;
+        }
+
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.5; }
+            100% { opacity: 1; }
+        }
+
         /* Responsive Design */
         @media (max-width: 1200px) {
             .main-grid {
@@ -443,38 +567,13 @@
                 grid-template-columns: 1fr;
             }
         }
-
-        /* Loading animations */
-        .loading {
-            display: inline-block;
-            width: 20px;
-            height: 20px;
-            border: 3px solid rgba(255, 255, 255, 0.3);
-            border-radius: 50%;
-            border-top-color: #fff;
-            animation: spin 1s ease-in-out infinite;
-        }
-
-        @keyframes spin {
-            to { transform: rotate(360deg); }
-        }
-
-        .pulse {
-            animation: pulse 2s infinite;
-        }
-
-        @keyframes pulse {
-            0% { opacity: 1; }
-            50% { opacity: 0.5; }
-            100% { opacity: 1; }
-        }
     </style>
 </head>
 <body>
     <div class="console-container">
         <div class="header">
-            <h1>🎯 Aveya IVF - Call Center Console</h1>
-            <p>Automated appointment booking system with intelligent call management</p>
+            <h1>📊 Aveya IVF - Call Center Console</h1>
+            <p>Automated appointment booking system with Google Sheets integration</p>
         </div>
 
         <div class="alerts-section" id="alertsSection"></div>
@@ -484,13 +583,42 @@
             <div class="control-panel">
                 <h2 class="panel-title">🎮 Control Panel</h2>
 
-                <!-- File Upload Section -->
+                <!-- Google Sheets Connection Section -->
+                <div class="sheets-section" id="sheetsSection">
+                    <h3 style="margin-bottom: 15px; color: #2c3e50;">📊 Google Sheets Connection</h3>
+
+                    <div class="sheet-input-group">
+                        <input
+                            type="text"
+                            id="sheetIdInput"
+                            class="sheet-id-input"
+                            placeholder="Enter Google Sheet ID (e.g., 1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms)"
+                            autocomplete="off"
+                        >
+                        <button class="sheet-connect-btn" id="connectSheetBtn" onclick="connectToSheet()">
+                            📊 Connect
+                        </button>
+                    </div>
+
+                    <div class="sheet-info" id="sheetInfo"></div>
+
+                    <div class="sheet-help">
+                        <strong>How to get Sheet ID:</strong><br>
+                        1. Open your Google Sheet<br>
+                        2. Copy the ID from URL: docs.google.com/spreadsheets/d/<strong>SHEET_ID</strong>/edit<br>
+                        3. Make sure your sheet is shared with the service account email<br>
+                        <br>
+                        <strong>Required worksheets:</strong> Records, Appointment_Details, Reschedule_Requests, Incomplete_Calls
+                    </div>
+                </div>
+
+                <!-- Legacy File Upload Section (fallback) -->
                 <div class="upload-section" id="uploadSection">
                     <div class="file-input-wrapper">
                         <input type="file" id="fileInput" class="file-input" accept=".xlsx,.xls">
                         <button class="file-input-button" onclick="document.getElementById('fileInput').click()">
-                            📁 Upload Patient Records
-                            <span style="font-size: 0.85em; opacity: 0.8;">(Excel format)</span>
+                            📁 Upload Excel File (Legacy)
+                            <span style="font-size: 0.85em; opacity: 0.8;">(Use Google Sheets instead)</span>
                         </button>
                     </div>
                     <div class="file-info" id="fileInfo"></div>
@@ -498,7 +626,7 @@
 
                 <!-- Control Buttons -->
                 <div class="controls-grid">
-                    <button class="control-btn btn-start" id="startBtn" onclick="startQueue()">
+                    <button class="control-btn btn-start" id="startBtn" onclick="startQueue()" disabled>
                         ▶️ Start
                     </button>
                     <button class="control-btn btn-pause" id="pauseBtn" onclick="pauseQueue()" disabled>
@@ -510,8 +638,11 @@
                     <button class="control-btn btn-skip" id="skipBtn" onclick="skipCurrent()" disabled>
                         ⏭️ Skip
                     </button>
-                    <button class="control-btn btn-reset" id="resetBtn" onclick="resetQueue()">
+                    <button class="control-btn btn-reset" id="resetBtn" onclick="resetQueue()" disabled>
                         🔄 Reset
+                    </button>
+                    <button class="control-btn btn-disconnect" id="disconnectBtn" onclick="disconnectSheet()" disabled>
+                        🔌 Disconnect
                     </button>
                 </div>
 
@@ -602,7 +733,7 @@
                 <div class="log-entry">
                     <span class="log-timestamp">[2024-12-25 14:30:22]</span>
                     <span class="log-level-info">[INFO]</span>
-                    System initialized and ready for operation
+                    System initialized and ready for Google Sheets integration
                 </div>
             </div>
         </div>
@@ -614,6 +745,8 @@
                 this.statusUpdateInterval = null;
                 this.ws = null;
                 this.currentStatus = 'idle';
+                this.sheetConnected = false;
+                this.currentSheetId = null;
 
                 this.init();
             }
@@ -621,11 +754,7 @@
             init() {
                 // Initialize event listeners
                 document.getElementById('fileInput').addEventListener('change', this.handleFileUpload.bind(this));
-
-                // Setup drag and drop
-                const uploadSection = document.getElementById('uploadSection');
-                uploadSection.addEventListener('dragover', this.handleDragOver);
-                uploadSection.addEventListener('drop', this.handleFileDrop.bind(this));
+                document.getElementById('sheetIdInput').addEventListener('keypress', this.handleSheetIdKeypress.bind(this));
 
                 // Start status updates
                 this.startStatusUpdates();
@@ -634,72 +763,144 @@
                 // Initial status fetch
                 this.fetchStatus();
 
-                this.log('System initialized and ready for operation', 'info');
+                this.log('System initialized and ready for Google Sheets integration', 'info');
             }
 
-            async handleFileUpload(event) {
-                const file = event.target.files[0];
-                if (file) {
-                    await this.uploadFile(file);
+            handleSheetIdKeypress(event) {
+                if (event.key === 'Enter') {
+                    this.connectToSheet();
                 }
             }
 
-            handleDragOver(event) {
-                event.preventDefault();
-                event.currentTarget.classList.add('dragover');
-            }
+            async connectToSheet() {
+                const sheetId = document.getElementById('sheetIdInput').value.trim();
 
-            async handleFileDrop(event) {
-                event.preventDefault();
-                event.currentTarget.classList.remove('dragover');
-
-                const files = event.dataTransfer.files;
-                if (files.length > 0) {
-                    await this.uploadFile(files[0]);
+                if (!sheetId) {
+                    this.showAlert('Please enter a Google Sheet ID', 'warning');
+                    return;
                 }
-            }
 
-            async uploadFile(file) {
                 try {
-                    this.log(`Uploading file: ${file.name}`, 'info');
-                    this.showAlert('Uploading file...', 'info');
+                    this.log(`Connecting to Google Sheet: ${sheetId}`, 'info');
+                    this.showAlert('Connecting to Google Sheet...', 'info');
 
-                    const formData = new FormData();
-                    formData.append('file', file);
+                    // Show loading state
+                    const connectBtn = document.getElementById('connectSheetBtn');
+                    const originalText = connectBtn.innerHTML;
+                    connectBtn.innerHTML = '<div class="loading"></div> Connecting...';
+                    connectBtn.disabled = true;
 
-                    const response = await fetch('/api/upload-records', {
+                    const response = await fetch('/api/connect-sheet', {
                         method: 'POST',
-                        body: formData
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            sheet_id: sheetId,
+                            worksheet_name: 'Records'
+                        })
                     });
 
                     const result = await response.json();
 
                     if (result.success) {
-                        this.showAlert(`Successfully uploaded ${result.data.total_records} records`, 'success');
-                        this.log(`File uploaded successfully: ${result.data.total_records} records loaded`, 'success');
+                        this.showAlert(`Successfully connected to Google Sheet with ${result.data.total_records} records`, 'success');
+                        this.log(`Connected to Google Sheet: ${result.data.total_records} records loaded`, 'success');
 
-                        // Update file info
-                        const fileInfo = document.getElementById('fileInfo');
-                        fileInfo.innerHTML = `
-                            <strong>📁 ${file.name}</strong><br>
-                            📊 ${result.data.total_records} records loaded<br>
-                            🕐 ${new Date(result.data.upload_timestamp).toLocaleString()}
+                        // Update sheet info
+                        const sheetInfo = document.getElementById('sheetInfo');
+                        sheetInfo.innerHTML = `
+                            <strong>📊 Connected Successfully</strong><br>
+                            📈 ${result.data.total_records} records loaded<br>
+                            🕐 ${new Date(result.data.connection_timestamp).toLocaleString()}<br>
+                            🆔 Sheet ID: ${sheetId}<br>
+                            📋 Worksheet: ${result.data.sheet_info.worksheet_name}
                         `;
-                        fileInfo.classList.add('show');
+                        sheetInfo.classList.add('show');
 
-                        // Enable start button
+                        // Update UI state
+                        this.sheetConnected = true;
+                        this.currentSheetId = sheetId;
+                        document.getElementById('sheetsSection').classList.add('connected');
+                        document.getElementById('uploadSection').classList.remove('show');
+
+                        // Enable controls
                         document.getElementById('startBtn').disabled = false;
+                        document.getElementById('resetBtn').disabled = false;
+                        document.getElementById('disconnectBtn').disabled = false;
+
+                        // Update connect button
+                        connectBtn.innerHTML = '✅ Connected';
+                        connectBtn.disabled = false;
 
                         // Refresh status
                         await this.fetchStatus();
 
                     } else {
-                        throw new Error(result.message || 'Upload failed');
+                        throw new Error(result.error || 'Connection failed');
                     }
 
                 } catch (error) {
-                    this.showAlert(`Upload failed: ${error.message}`, 'error');
-                    this.log(`Upload failed: ${error.message}`, 'error');
+                    this.showAlert(`Failed to connect: ${error.message}`, 'error');
+                    this.log(`Failed to connect to Google Sheet: ${error.message}`, 'error');
+
+                    // Reset button state
+                    const connectBtn = document.getElementById('connectSheetBtn');
+                    connectBtn.innerHTML = originalText;
+                    connectBtn.disabled = false;
+                }
+            }
+
+            async disconnectSheet() {
+                try {
+                    this.log('Disconnecting from Google Sheet...', 'info');
+
+                    const response = await fetch('/api/disconnect-sheet', {
+                        method: 'POST'
+                    });
+
+                    const result = await response.json();
+
+                    if (result.success) {
+                        this.showAlert('Disconnected from Google Sheet', 'info');
+                        this.log('Disconnected from Google Sheet', 'info');
+
+                        // Reset UI state
+                        this.sheetConnected = false;
+                        this.currentSheetId = null;
+                        document.getElementById('sheetsSection').classList.remove('connected');
+                        document.getElementById('sheetInfo').classList.remove('show');
+                        document.getElementById('sheetIdInput').value = '';
+                        document.getElementById('uploadSection').classList.add('show');
+
+                        // Reset connect button
+                        const connectBtn = document.getElementById('connectSheetBtn');
+                        connectBtn.innerHTML = '📊 Connect';
+                        connectBtn.disabled = false;
+
+                        // Disable controls
+                        this.updateControlButtons('idle');
+                        document.getElementById('startBtn').disabled = true;
+                        document.getElementById('disconnectBtn').disabled = true;
+
+                        // Clear status
+                        await this.fetchStatus();
+
+                    } else {
+                        throw new Error(result.error);
+                    }
+
+                } catch (error) {
+                    this.showAlert(`Failed to disconnect: ${error.message}`, 'error');
+                    this.log(`Failed to disconnect: ${error.message}`, 'error');
+                }
+            }
+
+            async handleFileUpload(event) {
+                const file = event.target.files[0];
+                if (file) {
+                    this.showAlert('Excel upload is deprecated. Please use Google Sheets integration instead.', 'warning');
+                    this.log('Legacy Excel upload attempted - redirecting to Google Sheets', 'warning');
                 }
             }
 
@@ -718,7 +919,7 @@
                         this.log('Call queue started', 'success');
                         this.updateControlButtons('running');
                     } else {
-                        throw new Error(result.message);
+                        throw new Error(result.error);
                     }
 
                 } catch (error) {
@@ -740,7 +941,7 @@
                         this.log('Call queue paused', 'warning');
                         this.updateControlButtons('paused');
                     } else {
-                        throw new Error(result.message);
+                        throw new Error(result.error);
                     }
 
                 } catch (error) {
@@ -762,7 +963,7 @@
                         this.log('Call queue stopped', 'info');
                         this.updateControlButtons('stopped');
                     } else {
-                        throw new Error(result.message);
+                        throw new Error(result.error);
                     }
 
                 } catch (error) {
@@ -783,7 +984,7 @@
                         this.showAlert('Current call skipped', 'info');
                         this.log(`Skipped call to ${result.data.skipped_record.name}`, 'info');
                     } else {
-                        throw new Error(result.message);
+                        throw new Error(result.error);
                     }
 
                 } catch (error) {
@@ -806,7 +1007,7 @@
                         this.updateControlButtons('idle');
                         await this.fetchStatus();
                     } else {
-                        throw new Error(result.message);
+                        throw new Error(result.error);
                     }
 
                 } catch (error) {
@@ -821,8 +1022,6 @@
                     const status = await response.json();
 
                     this.updateStatusDisplay(status);
-
-                    // Update control buttons based on status
                     this.updateControlButtons(status.status);
 
                 } catch (error) {
@@ -831,10 +1030,6 @@
             }
 
             updateStatusDisplay(status) {
-                // Update status values
-                document.getElementById('totalRecords').textContent = status.total_records || 0;
-                document.getElementById('completedCalls').textContent = status.current_index || 0;
-                document.getElementById('remainingCalls').textContent = status.remaining_calls || 0;
 
                 // Update queue status badge
                 const statusBadge = document.getElementById('queueStatus');
@@ -871,6 +1066,27 @@
                     document.getElementById('currentPatientAddress').textContent = '-';
                 }
 
+                // Update sheet connection status
+                if (status.connected_sheet_id && !this.sheetConnected) {
+                    this.sheetConnected = true;
+                    this.currentSheetId = status.connected_sheet_id;
+                    document.getElementById('sheetsSection').classList.add('connected');
+                    document.getElementById('sheetIdInput').value = status.connected_sheet_id;
+                    document.getElementById('connectSheetBtn').innerHTML = '✅ Connected';
+                    document.getElementById('disconnectBtn').disabled = false;
+
+                    if (status.sheet_info) {
+                        const sheetInfo = document.getElementById('sheetInfo');
+                        sheetInfo.innerHTML = `
+                            <strong>📊 ${status.sheet_info.title || 'Connected Sheet'}</strong><br>
+                            📈 ${status.total_records} records loaded<br>
+                            🕐 ${status.connection_timestamp ? new Date(status.connection_timestamp).toLocaleString() : 'Connected'}<br>
+                            🆔 Sheet ID: ${status.connected_sheet_id}
+                        `;
+                        sheetInfo.classList.add('show');
+                    }
+                }
+
                 this.currentStatus = status.status;
             }
 
@@ -886,6 +1102,12 @@
                     btn.disabled = true;
                     btn.classList.remove('pulse');
                 });
+
+                // Only enable controls if sheet is connected
+                if (!this.sheetConnected) {
+                    resetBtn.disabled = true;
+                    return;
+                }
 
                 switch (status) {
                     case 'idle':
@@ -926,7 +1148,7 @@
                         this.log('Call queue resumed', 'success');
                         this.updateControlButtons('running');
                     } else {
-                        throw new Error(result.message);
+                        throw new Error(result.error);
                     }
 
                 } catch (error) {
@@ -953,7 +1175,6 @@
 
                     this.ws.onclose = () => {
                         this.log('WebSocket disconnected', 'warning');
-                        // Attempt to reconnect after 5 seconds
                         setTimeout(() => this.connectWebSocket(), 5000);
                     };
 
@@ -963,7 +1184,6 @@
             }
 
             startStatusUpdates() {
-                // Fetch status every 5 seconds as backup to WebSocket
                 this.statusUpdateInterval = setInterval(() => {
                     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
                         this.fetchStatus();
@@ -983,7 +1203,6 @@
 
                 alertsSection.appendChild(alert);
 
-                // Auto-remove after 5 seconds
                 setTimeout(() => {
                     if (alert.parentElement) {
                         alert.remove();
@@ -1006,7 +1225,6 @@
                 logsSection.appendChild(logEntry);
                 logsSection.scrollTop = logsSection.scrollHeight;
 
-                // Keep only last 50 log entries
                 while (logsSection.children.length > 50) {
                     logsSection.removeChild(logsSection.firstChild);
                 }
@@ -1021,52 +1239,55 @@
                 }
             }
         }
+
         // Global functions for button onclick handlers
-        let callCenterConsole = null; // Changed from 'console' to 'callCenterConsole'
+        let callCenterConsole = null;
+
+        function connectToSheet() {
+            if (callCenterConsole) {
+                callCenterConsole.connectToSheet();
+            }
+        }
+
+        function disconnectSheet() {
+            if (callCenterConsole) {
+                callCenterConsole.disconnectSheet();
+            }
+        }
 
         function startQueue() {
             if (callCenterConsole) {
                 callCenterConsole.startQueue();
-            } else {
-                console.error('Call center console not initialized');
             }
         }
 
         function pauseQueue() {
             if (callCenterConsole) {
                 callCenterConsole.pauseQueue();
-            } else {
-                console.error('Call center console not initialized');
             }
         }
 
         function stopQueue() {
             if (callCenterConsole) {
                 callCenterConsole.stopQueue();
-            } else {
-                console.error('Call center console not initialized');
             }
         }
 
         function skipCurrent() {
             if (callCenterConsole) {
                 callCenterConsole.skipCurrent();
-            } else {
-                console.error('Call center console not initialized');
             }
         }
 
         function resetQueue() {
             if (callCenterConsole) {
                 callCenterConsole.resetQueue();
-            } else {
-                console.error('Call center console not initialized');
             }
         }
 
         // Initialize when page loads
         document.addEventListener('DOMContentLoaded', () => {
-            callCenterConsole = new CallCenterConsole(); // Changed variable name
+            callCenterConsole = new CallCenterConsole();
         });
 
         // Cleanup on page unload
