@@ -25,9 +25,12 @@ class Settings(BaseSettings):
     AUTO_HANGUP_DELAY: int = 3  # seconds to wait before hanging up
     HANGUP_URL: str
 
-    # MONGODB_URLMongoDB Settings
+    # MongoDB Settings
     MONGODB_URL: str
     MONGODB_DATABASE: str = "voice_assistant_db"
+
+    # Google Sheets Configuration
+    GOOGLE_SERVICE_ACCOUNT_FILE: str = "credentials.json"  # Path to service account JSON file
 
     # Call Management Settings
     MAX_CALL_DURATION: int = 600  # 10 minutes max call duration
@@ -47,7 +50,7 @@ class Settings(BaseSettings):
     LOG_LEVEL: str = "INFO"
     LOG_FILE: str = "call_center.log"
 
-    # Excel Files Configuration
+    # Excel Files Configuration (keeping for backward compatibility)
     PATIENT_RECORDS_FILE: str = "Hospital_Records.xlsx"
     APPOINTMENT_DETAILS_FILE: str = "Appointment_Details.xlsx"
     RESCHEDULE_REQUESTS_FILE: str = "Reschedule_Requests.xlsx"

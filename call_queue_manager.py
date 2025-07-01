@@ -1,14 +1,11 @@
 """
-Enhanced Call Queue Manager with Improved Stop Functionality
+Enhanced Call Queue Manager with Google Sheets Integration and Monitoring
 """
 import asyncio
 import logging
-import openpyxl
 from typing import List, Dict, Optional
 from enum import Enum
 from datetime import datetime
-import io
-import pandas as pd
 import httpx
 from settings import settings
 
@@ -35,13 +32,14 @@ class CallResult(Enum):
 
 
 class CallRecord:
-    def __init__(self, index: int, name: str, phone: str, address: str, age: str, gender: str):
+    def __init__(self, index: int, name: str, phone: str, address: str, age: str, gender: str, row_number: int = None):
         self.index = index
         self.name = name
         self.phone = phone
         self.address = address
         self.age = age
         self.gender = gender
+        self.row_number = row_number or (index + 2)  # Default to index + 2 for Excel row
         self.status = CallResult.PENDING
         self.attempts = 0
         self.last_attempt = None
@@ -56,6 +54,7 @@ class CallRecord:
             "address": self.address,
             "age": self.age,
             "gender": self.gender,
+            "row_number": self.row_number,
             "status": self.status.value,
             "attempts": self.attempts,
             "last_attempt": self.last_attempt.isoformat() if self.last_attempt else None,
@@ -64,16 +63,17 @@ class CallRecord:
         }
 
 
-class CallQueueManager:
-    """Manages the calling queue with full control capabilities"""
+class EnhancedCallQueueManager:
+    """Enhanced Call Queue Manager with Google Sheets integration and monitoring"""
 
     def __init__(self):
         self.status = QueueStatus.IDLE
         self.records: List[CallRecord] = []
         self.current_index = 0
         self.total_records = 0
-        self.uploaded_filename = None
-        self.upload_timestamp = None
+        self.connected_sheet_id = None
+        self.sheet_connection_info = None
+        self.connection_timestamp = None
 
         # Statistics
         self.stats = {
@@ -86,109 +86,207 @@ class CallQueueManager:
             "queue_completed_at": None
         }
 
-        # Control flags - IMPROVED
+        # Control flags
         self._should_stop = False
         self._calling_task = None
-        self._call_in_progress = False  # NEW: Track if a call is currently active
-        self._stop_after_current_call = False  # NEW: Flag to stop after current call
+        self._call_in_progress = False
+        self._stop_after_current_call = False
 
-        logger.info("CallQueueManager initialized")
+        # Google Sheets monitoring
+        self.monitoring_enabled = False
 
-    async def upload_records(self, file_content: bytes, filename: str) -> Dict:
-        """Upload and parse Excel file with patient records"""
+        logger.info("Enhanced Call Queue Manager initialized")
+
+    async def connect_to_google_sheet(self, sheet_id: str, worksheet_name: str = "Records") -> Dict:
+        """Connect to Google Sheet and load patient records"""
         try:
-            logger.info(f"Uploading records from file: {filename}")
+            logger.info(f"Connecting to Google Sheet: {sheet_id}")
+
+            # Import here to avoid circular imports
+            from google_sheets_service import google_sheets_service
+
+            # Initialize Google Sheets service if not already done
+            if not google_sheets_service.client:
+                initialized = await google_sheets_service.initialize()
+                if not initialized:
+                    return {
+                        "success": False,
+                        "error": "Failed to initialize Google Sheets service"
+                    }
+
+            # Connect to the sheet
+            connection_result = await google_sheets_service.connect_to_sheet(sheet_id, worksheet_name)
+
+            if not connection_result["success"]:
+                return connection_result
+
+            # Load records from the sheet
+            records_data, errors = await google_sheets_service.read_all_records()
+
+            if not records_data:
+                return {
+                    "success": False,
+                    "error": "No valid records found in the sheet",
+                    "errors": errors
+                }
 
             # Reset previous data
             self.records = []
             self.current_index = 0
             self.status = QueueStatus.IDLE
 
-            # Parse Excel file
-            df = pd.read_excel(io.BytesIO(file_content))
-
-            # Validate required columns
-            required_columns = ['Name', 'Phone Number', 'Address', 'Age', 'Gender']
-            missing_columns = [col for col in required_columns if col not in df.columns]
-
-            if missing_columns:
-                raise ValueError(f"Missing required columns: {missing_columns}")
-
-            # Process records
+            # Process records into CallRecord objects
             valid_records = 0
-            errors = []
+            processing_errors = []
 
-            for index, row in df.iterrows():
+            for record_data in records_data:
                 try:
-                    # Validate phone number
-                    phone = str(row['Phone Number']).strip()
-                    if not phone or phone == 'nan':
-                        errors.append(f"Row {index + 2}: Missing phone number")
-                        continue
-
-                    # Create call record
                     record = CallRecord(
                         index=valid_records,
-                        name=str(row['Name']).strip(),
-                        phone=phone,
-                        address=str(row['Address']).strip(),
-                        age=str(row['Age']).strip(),
-                        gender=str(row['Gender']).strip()
+                        name=record_data['name'],
+                        phone=record_data['phone'],
+                        address=record_data['address'],
+                        age=record_data['age'],
+                        gender=record_data['gender'],
+                        row_number=record_data.get('row_number', valid_records + 2)
                     )
 
                     self.records.append(record)
                     valid_records += 1
 
                 except Exception as e:
-                    errors.append(f"Row {index + 2}: {str(e)}")
+                    processing_errors.append(f"Record {record_data.get('index', '?')}: {str(e)}")
 
             self.total_records = len(self.records)
-            self.uploaded_filename = filename
-            self.upload_timestamp = datetime.now()
+            self.connected_sheet_id = sheet_id
+            self.sheet_connection_info = connection_result
+            self.connection_timestamp = datetime.now()
 
-            logger.info(f"Successfully loaded {self.total_records} records from {filename}")
+            # Combine errors
+            all_errors = errors + processing_errors
+
+            logger.info(f"Successfully loaded {self.total_records} records from Google Sheets")
 
             return {
                 "success": True,
                 "total_records": self.total_records,
                 "valid_records": valid_records,
-                "errors": errors[:10],  # Limit errors shown
-                "filename": filename,
-                "upload_timestamp": self.upload_timestamp.isoformat()
+                "errors": all_errors[:10],  # Limit errors shown
+                "sheet_info": connection_result,
+                "connection_timestamp": self.connection_timestamp.isoformat()
             }
 
         except Exception as e:
-            logger.error(f"Failed to upload records: {e}")
+            logger.error(f"Failed to connect to Google Sheet: {e}")
             return {
                 "success": False,
                 "error": str(e),
                 "total_records": 0
             }
 
+    async def start_monitoring(self):
+        """Start monitoring Google Sheets for new records"""
+        try:
+            if not self.connected_sheet_id:
+                logger.warning("No Google Sheet connected for monitoring")
+                return False
+
+            from google_sheets_service import google_sheets_service
+
+            # Start monitoring with callback
+            await google_sheets_service.start_monitoring(
+                callback_func=self._handle_new_records,
+                check_interval=30
+            )
+
+            self.monitoring_enabled = True
+            logger.info("🔍 Started monitoring Google Sheets for new records")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to start monitoring: {e}")
+            return False
+
+    async def stop_monitoring(self):
+        """Stop monitoring Google Sheets"""
+        try:
+            from google_sheets_service import google_sheets_service
+            await google_sheets_service.stop_monitoring()
+            self.monitoring_enabled = False
+            logger.info("🛑 Stopped monitoring Google Sheets")
+
+        except Exception as e:
+            logger.error(f"Error stopping monitoring: {e}")
+
+    async def _handle_new_records(self, new_records: List[Dict]):
+        """Handle callback when new records are detected in Google Sheets"""
+        try:
+            logger.info(f"🆕 Processing {len(new_records)} new records from Google Sheets")
+
+            records_added = 0
+            for record_data in new_records:
+                try:
+                    new_record = CallRecord(
+                        index=self.total_records + records_added,
+                        name=record_data['name'],
+                        phone=record_data['phone'],
+                        address=record_data['address'],
+                        age=record_data['age'],
+                        gender=record_data['gender'],
+                        row_number=record_data.get('row_number', self.total_records + records_added + 2)
+                    )
+
+                    self.records.append(new_record)
+                    records_added += 1
+
+                    logger.info(f"✅ Added new record: {new_record.name} (Row {new_record.row_number})")
+
+                except Exception as e:
+                    logger.error(f"❌ Error processing new record: {e}")
+
+            # Update total count
+            self.total_records = len(self.records)
+
+            if records_added > 0:
+                logger.info(f"🎯 Successfully added {records_added} new records to queue")
+
+                # If queue is paused and we have new records, we could optionally resume
+                # This is business logic that can be customized
+                if self.status == QueueStatus.PAUSED and not self._call_in_progress:
+                    logger.info("📋 New records detected while paused - queue remains paused")
+
+        except Exception as e:
+            logger.error(f"❌ Error handling new records: {e}")
+
     async def start_queue(self) -> Dict:
-        """Start the calling queue"""
+        """Start the calling queue with monitoring"""
         try:
             if not self.records:
-                return {"success": False, "error": "No records uploaded"}
+                return {"success": False, "error": "No records loaded from Google Sheets"}
 
             if self.status == QueueStatus.RUNNING:
                 return {"success": False, "error": "Queue is already running"}
 
             self.status = QueueStatus.RUNNING
             self._should_stop = False
-            self._stop_after_current_call = False  # Reset stop flag
+            self._stop_after_current_call = False
             self.stats["queue_started_at"] = datetime.now()
+
+            # Start monitoring for new records
+            await self.start_monitoring()
 
             # Start the calling task
             self._calling_task = asyncio.create_task(self._calling_loop())
 
-            logger.info(f"Started calling queue with {self.total_records} records")
+            logger.info(f"Started calling queue with {self.total_records} records and Google Sheets monitoring")
 
             return {
                 "success": True,
                 "status": self.status.value,
                 "total_records": self.total_records,
-                "current_index": self.current_index
+                "current_index": self.current_index,
+                "sheet_id": self.connected_sheet_id,
+                "monitoring_enabled": self.monitoring_enabled
             }
 
         except Exception as e:
@@ -197,10 +295,10 @@ class CallQueueManager:
             return {"success": False, "error": str(e)}
 
     async def pause_queue(self) -> Dict:
-        """Pause the calling queue"""
+        """Pause the calling queue (keeps monitoring active)"""
         if self.status == QueueStatus.RUNNING:
             self.status = QueueStatus.PAUSED
-            logger.info("Queue paused")
+            logger.info("Queue paused (monitoring continues)")
             return {"success": True, "status": self.status.value}
 
         return {"success": False, "error": f"Cannot pause queue in {self.status.value} state"}
@@ -215,19 +313,20 @@ class CallQueueManager:
         return {"success": False, "error": f"Cannot resume queue in {self.status.value} state"}
 
     async def stop_queue(self) -> Dict:
-        """Stop the calling queue - IMPROVED VERSION"""
+        """Stop the calling queue and monitoring"""
         try:
             logger.info("🛑 Stop queue requested")
-            
-            # Set stop flags
+
             self._should_stop = True
-            
-            # Check if a call is currently in progress
+
+            # Stop monitoring
+            await self.stop_monitoring()
+
             if self._call_in_progress:
                 logger.info("📞 Call in progress - will stop after current call completes")
                 self._stop_after_current_call = True
-                self.status = QueueStatus.STOPPED  # Update status immediately
-                
+                self.status = QueueStatus.STOPPED
+
                 return {
                     "success": True,
                     "status": self.status.value,
@@ -237,10 +336,8 @@ class CallQueueManager:
                     "total_records": self.total_records
                 }
             else:
-                # No call in progress, stop immediately
                 self.status = QueueStatus.STOPPED
 
-                # Cancel the calling task
                 if self._calling_task and not self._calling_task.done():
                     self._calling_task.cancel()
                     try:
@@ -274,7 +371,7 @@ class CallQueueManager:
             current_record.result_details = "Manually skipped"
 
             self.current_index += 1
-            logger.info(f"Skipped call to {current_record.name} ({current_record.phone})")
+            logger.info(f"Skipped call to {current_record.name} (Row {current_record.row_number})")
 
             return {
                 "success": True,
@@ -298,8 +395,8 @@ class CallQueueManager:
 
             self.current_index = 0
             self.status = QueueStatus.IDLE
-            self._call_in_progress = False  # Reset call progress flag
-            self._stop_after_current_call = False  # Reset stop flag
+            self._call_in_progress = False
+            self._stop_after_current_call = False
 
             # Reset stats
             self.stats = {
@@ -326,14 +423,11 @@ class CallQueueManager:
 
     def get_status(self) -> Dict:
         """Get current queue status and statistics"""
-
-        # Helper function to serialize datetime objects
         def serialize_datetime(obj):
             if isinstance(obj, datetime):
                 return obj.isoformat()
             return obj
 
-        # Serialize stats with datetime conversion
         serialized_stats = {}
         for key, value in self.stats.items():
             serialized_stats[key] = serialize_datetime(value)
@@ -344,14 +438,44 @@ class CallQueueManager:
             "current_index": self.current_index,
             "progress_percentage": (self.current_index / self.total_records * 100) if self.total_records > 0 else 0,
             "remaining_calls": max(0, self.total_records - self.current_index),
-            "uploaded_filename": self.uploaded_filename,
-            "upload_timestamp": self.upload_timestamp.isoformat() if self.upload_timestamp else None,
+            "connected_sheet_id": self.connected_sheet_id,
+            "sheet_info": self.sheet_connection_info,
+            "connection_timestamp": self.connection_timestamp.isoformat() if self.connection_timestamp else None,
+            "monitoring_enabled": self.monitoring_enabled,
             "stats": serialized_stats,
             "current_record": self.records[self.current_index].to_dict() if self.current_index < len(
                 self.records) else None,
-            "call_in_progress": self._call_in_progress,  # NEW: Include call progress status
-            "stop_pending": self._stop_after_current_call  # NEW: Include stop pending status
+            "call_in_progress": self._call_in_progress,
+            "stop_pending": self._stop_after_current_call
         }
+
+    async def get_records_summary(self) -> Dict:
+        """Get detailed summary of all records and their statuses"""
+        try:
+            if not self.records:
+                return {
+                    "total_records": 0,
+                    "status_distribution": {},
+                    "records": []
+                }
+
+            # Calculate status distribution
+            status_distribution = {}
+            for record in self.records:
+                status = record.status.value
+                status_distribution[status] = status_distribution.get(status, 0) + 1
+
+            return {
+                "total_records": len(self.records),
+                "status_distribution": status_distribution,
+                "records": [record.to_dict() for record in self.records],
+                "sheet_id": self.connected_sheet_id,
+                "monitoring_active": self.monitoring_enabled
+            }
+
+        except Exception as e:
+            logger.error(f"Failed to get records summary: {e}")
+            return {"error": str(e)}
 
     def get_current_record(self) -> Optional[CallRecord]:
         """Get the current record being processed"""
@@ -380,7 +504,7 @@ class CallQueueManager:
             elif result == CallResult.CALL_FAILED:
                 self.stats["failed_calls"] += 1
 
-            logger.info(f"Call result marked: {result.value} for {record.name}")
+            logger.info(f"Call result marked: {result.value} for {record.name} (Row {record.row_number})")
 
     async def move_to_next_record(self):
         """Move to the next record in the queue"""
@@ -389,16 +513,16 @@ class CallQueueManager:
         if self.current_index >= self.total_records:
             self.status = QueueStatus.COMPLETED
             self.stats["queue_completed_at"] = datetime.now()
+            await self.stop_monitoring()  # Stop monitoring when queue completes
             logger.info("All calls completed!")
 
     async def _calling_loop(self):
-        """Internal calling loop - COMPLETELY FIXED VERSION"""
+        """Internal calling loop with Google Sheets integration"""
         try:
             while (self.current_index < self.total_records and
                 not self._should_stop and
                 self.status in [QueueStatus.RUNNING, QueueStatus.PAUSED]):
 
-                # Check for stop condition at the start of each iteration
                 if self._should_stop:
                     logger.info("🛑 Stop flag detected - exiting calling loop")
                     break
@@ -410,74 +534,62 @@ class CallQueueManager:
                 current_record = self.get_current_record()
                 if current_record and current_record.status == CallResult.PENDING:
                     logger.info(
-                        f"🔄 Processing call {self.current_index + 1}/{self.total_records}: {current_record.name}")
+                        f"🔄 Processing call {self.current_index + 1}/{self.total_records}: {current_record.name} (Row {current_record.row_number})")
 
-                    # Set call in progress flag BEFORE making call
                     self._call_in_progress = True
 
-                    # Make the actual call via webhook
                     success = await self._make_actual_call(current_record)
 
                     if success:
                         logger.info(f"✅ Call initiated successfully for {current_record.name}")
 
-                        # CRITICAL: Wait for call to complete - FIXED LOGIC
                         call_timeout = 0
-                        max_call_duration = 600  # 10 minutes max per call
-                        check_interval = 5  # Check every 5 seconds
+                        max_call_duration = 600
+                        check_interval = 5
 
-                        # Wait until call is no longer in CALLING status
                         while (current_record.status == CallResult.CALLING and
                             not self._should_stop and
                             self.status in [QueueStatus.RUNNING, QueueStatus.STOPPED] and
                             call_timeout < max_call_duration):
-                            
+
                             logger.info(f"⏳ Waiting for call to complete: {current_record.name} (timeout: {call_timeout}s)")
                             await asyncio.sleep(check_interval)
                             call_timeout += check_interval
-                            
-                            # Check for stop condition during call
+
                             if self._should_stop:
                                 logger.info(f"🛑 Stop requested during call to {current_record.name}")
                                 break
 
-                        # Call completed or timed out - clear in progress flag
                         self._call_in_progress = False
 
-                        # If call timed out, mark as failed and move to next
                         if call_timeout >= max_call_duration and current_record.status == CallResult.CALLING:
                             logger.warning(f"⏰ Call timed out for {current_record.name}")
                             await self.mark_call_result(CallResult.CALL_FAILED, "Call timeout - exceeded maximum duration")
                             await self.move_to_next_record()
 
-                        # Check if we should stop after this call
                         if self._stop_after_current_call:
                             logger.info(f"🛑 Stopping queue after completing call to {current_record.name}")
                             break
 
-                        # If call completed successfully, the move_to_next_record will be handled by complete_current_call
                         logger.info(f"✅ Call completed for {current_record.name}, status: {current_record.status.value}")
 
                     else:
-                        # Call failed to initiate, move to next
                         logger.error(f"❌ Failed to initiate call for {current_record.name}")
                         await self.mark_call_result(CallResult.CALL_FAILED, "Failed to initiate call")
-                        self._call_in_progress = False  # Clear flag
+                        self._call_in_progress = False
                         await self.move_to_next_record()
 
-                    # Brief pause between call attempts (only if not stopping)
                     if not self._should_stop and self.status == QueueStatus.RUNNING:
-                        await asyncio.sleep(10)  # 10 second pause between calls
+                        await asyncio.sleep(10)
 
                 else:
-                    # Current record already processed or no record, move to next
                     logger.info(f"📝 Current record already processed or invalid, moving to next")
                     await self.move_to_next_record()
 
-            # Queue completed or stopped
             if self.current_index >= self.total_records and not self._should_stop:
                 self.status = QueueStatus.COMPLETED
                 self.stats["queue_completed_at"] = datetime.now()
+                await self.stop_monitoring()
                 logger.info("🎉 All calls in queue completed!")
             elif self._should_stop:
                 self.status = QueueStatus.STOPPED
@@ -490,16 +602,15 @@ class CallQueueManager:
             logger.error(f"❌ Error in calling loop: {e}")
             self.status = QueueStatus.ERROR
         finally:
-            # Clean up flags
             self._call_in_progress = False
             self._stop_after_current_call = False
+            await self.stop_monitoring()
 
     async def _make_actual_call(self, record):
         """Make the actual call via webhook to Plivo"""
         try:
-            logger.info(f"📞 Initiating call to {record.name} ({record.phone})")
+            logger.info(f"📞 Initiating call to {record.name} ({record.phone}) from Google Sheets row {record.row_number}")
 
-            # Make the webhook call to trigger Plivo
             async with httpx.AsyncClient(timeout=60.0) as client:
                 webhook_url = f"{settings.HOST_URL}/webhook"
                 logger.info(f"🔗 Calling webhook: {webhook_url}")
@@ -521,7 +632,7 @@ class CallQueueManager:
             return False
 
     async def complete_current_call(self, result: CallResult, details: str = None):
-        """Mark current call as complete and move to next - IMPROVED WITH STOP HANDLING"""
+        """Mark current call as complete and move to next"""
         if self.current_index < len(self.records):
             current_record = self.records[self.current_index]
             current_record.status = result
@@ -540,26 +651,22 @@ class CallQueueManager:
             elif result == CallResult.CALL_FAILED:
                 self.stats["failed_calls"] += 1
 
-            logger.info(f"✅ Call completed: {result.value} for {current_record.name}")
+            logger.info(f"✅ Call completed: {result.value} for {current_record.name} (Row {current_record.row_number})")
 
-            # Clear call in progress flag
             self._call_in_progress = False
 
-            # CRITICAL: Check if we should stop before moving to next record
             if self._stop_after_current_call or self._should_stop:
                 logger.info("🛑 Queue stop requested - NOT moving to next record")
                 self.status = QueueStatus.STOPPED
-                
-                # Cancel the calling task if it exists
+
                 if self._calling_task and not self._calling_task.done():
                     self._calling_task.cancel()
-                
-                # Reset stop flags
+
                 self._stop_after_current_call = False
-                
+                await self.stop_monitoring()
+
                 logger.info(f"🛑 Queue stopped after completing call to {current_record.name}")
             else:
-                # Normal flow - move to next record
                 await self.move_to_next_record()
                 logger.info(f"➡️ Moving to next record (index: {self.current_index})")
 
@@ -567,6 +674,27 @@ class CallQueueManager:
             logger.warning("⚠️ No current record to complete")
             self._call_in_progress = False
 
+    def disconnect_sheet(self):
+        """Disconnect from the current Google Sheet"""
+        try:
+            # Stop monitoring first
+            if self.monitoring_enabled:
+                asyncio.create_task(self.stop_monitoring())
+
+            self.connected_sheet_id = None
+            self.sheet_connection_info = None
+            self.connection_timestamp = None
+            self.records = []
+            self.current_index = 0
+            self.total_records = 0
+            self.status = QueueStatus.IDLE
+            self.monitoring_enabled = False
+
+            logger.info("📊 Disconnected from Google Sheets")
+
+        except Exception as e:
+            logger.error(f"❌ Error disconnecting from Google Sheets: {e}")
+
 
 # Global instance
-call_queue_manager = CallQueueManager()
+call_queue_manager = EnhancedCallQueueManager()
