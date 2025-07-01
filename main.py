@@ -1,5 +1,5 @@
 """
-Updated Main.py with Streamlined Google Sheets Integration
+Updated Main.py with Google Drive API Integration for Real-time Sheets Monitoring
 """
 import json
 import base64
@@ -32,8 +32,9 @@ import logging
 from database.db_service import db_service
 from database.websocket_manager import websocket_manager
 
-# Google Sheets Integration
+# Google Sheets Integration with Real-time monitoring
 from google_sheets_service import google_sheets_service
+from drive_api_integration import drive_notification_service
 from call_queue_manager import call_queue_manager, CallResult, QueueStatus
 
 warnings.filterwarnings("ignore")
@@ -566,7 +567,7 @@ async def console_page():
 
 @app.get("/", response_class=JSONResponse)
 async def index_page():
-    return {"message": "Aveya IVF Voice Assistant with Google Sheets Integration"}
+    return {"message": "Aveya IVF Voice Assistant with Real-time Google Sheets Integration"}
 
 
 @app.get("/dashboard", response_class=HTMLResponse)
@@ -576,10 +577,42 @@ async def dashboard():
         return HTMLResponse(content=file.read())
 
 
+# Google Drive API Webhook Endpoint
+@app.api_route("/api/drive-webhook", methods=["GET", "POST"])
+async def drive_webhook_handler(request: Request):
+    """Handle Google Drive API webhook notifications"""
+    try:
+        # Extract headers
+        headers = dict(request.headers)
+
+        # Get request body if it exists
+        body = None
+        if request.method == "POST":
+            try:
+                body = await request.body()
+                body = body.decode('utf-8') if body else None
+            except:
+                body = None
+
+        # Process the webhook notification
+        result = await drive_notification_service.handle_webhook_notification(headers, body)
+
+        if result["success"]:
+            logger.info(f"✅ Drive webhook processed successfully: {result.get('message', 'OK')}")
+            return JSONResponse(content={"status": "success", "message": result.get("message", "Processed")})
+        else:
+            logger.warning(f"⚠️ Drive webhook processing failed: {result.get('error', 'Unknown error')}")
+            return JSONResponse(content={"status": "error", "message": result.get("error", "Failed")}, status_code=400)
+
+    except Exception as e:
+        logger.error(f"❌ Error in drive webhook handler: {e}")
+        return JSONResponse(content={"status": "error", "message": str(e)}, status_code=500)
+
+
 # Google Sheets API Endpoints
 @app.post("/api/connect-sheet")
 async def connect_google_sheet(request: Request):
-    """Connect to Google Sheet and load patient records"""
+    """Connect to Google Sheet and load patient records with real-time monitoring"""
     try:
         # Parse JSON body
         body = await request.json()
@@ -589,7 +622,7 @@ async def connect_google_sheet(request: Request):
         if not sheet_id:
             raise HTTPException(status_code=400, detail="Sheet ID is required")
 
-        logger.info(f"Connecting to Google Sheet: {sheet_id}")
+        logger.info(f"Connecting to Google Sheet with real-time monitoring: {sheet_id}")
 
         result = await call_queue_manager.connect_to_google_sheet(
             sheet_id=sheet_id,
@@ -597,10 +630,10 @@ async def connect_google_sheet(request: Request):
         )
 
         if result["success"]:
-            logger.info(f"Successfully connected to sheet with {result['total_records']} records")
+            logger.info(f"Successfully connected to sheet with {result['total_records']} records and real-time monitoring")
             return {
                 "success": True,
-                "message": f"Successfully connected to Google Sheet with {result['total_records']} records",
+                "message": f"Successfully connected to Google Sheet with {result['total_records']} records and real-time monitoring",
                 "data": result
             }
         else:
@@ -640,7 +673,8 @@ async def validate_sheet_access(request: Request):
                     "accessible": True,
                     "worksheet_name": connection_result.get("worksheet_name"),
                     "total_rows": connection_result.get("total_rows", 0),
-                    "data_rows": connection_result.get("data_rows", 0)
+                    "data_rows": connection_result.get("data_rows", 0),
+                    "monitoring_enabled": connection_result.get("monitoring_enabled", False)
                 }
             }
         else:
@@ -694,6 +728,19 @@ async def disconnect_google_sheet():
         raise HTTPException(status_code=500, detail=str(e))
 
 
+# Drive API Status Endpoint
+@app.get("/api/drive-status")
+async def get_drive_api_status():
+    """Get Google Drive API monitoring status"""
+    try:
+        status = drive_notification_service.get_status()
+        return JSONResponse(content=status)
+
+    except Exception as e:
+        logger.error(f"Failed to get Drive API status: {e}")
+        return JSONResponse(content={"error": str(e)}, status_code=500)
+
+
 # Queue Control API Endpoints
 @app.post("/api/queue/start")
 async def start_call_queue():
@@ -704,7 +751,7 @@ async def start_call_queue():
         if result["success"]:
             return {
                 "success": True,
-                "message": "Call queue started with Google Sheets monitoring",
+                "message": "Call queue started with real-time Google Sheets monitoring",
                 "data": result
             }
         else:
@@ -726,7 +773,7 @@ async def pause_call_queue():
         if result["success"]:
             return {
                 "success": True,
-                "message": "Call queue paused (monitoring continues)",
+                "message": "Call queue paused (real-time monitoring continues)",
                 "data": {"status": result["status"]}
             }
         else:
@@ -765,7 +812,7 @@ async def stop_call_queue():
 
         return {
             "success": True,
-            "message": "Call queue and monitoring stopped",
+            "message": "Call queue and real-time monitoring stopped",
             "data": result
         }
 
@@ -1029,9 +1076,12 @@ async def get_status():
     """Get current system status"""
     queue_status = call_queue_manager.get_status()
     sheets_status = google_sheets_service.get_status()
+    drive_status = drive_notification_service.get_status()
+
     return {
         "queue_status": queue_status,
         "google_sheets_status": sheets_status,
+        "drive_api_status": drive_status,
         "server_status": "running",
         "timestamp": datetime.now().isoformat()
     }
@@ -1449,7 +1499,7 @@ IMPORTANT BEHAVIOR:
 
 @app.on_event("startup")
 async def startup_event():
-    """Startup with Google Sheets integration"""
+    """Startup with Real-time Google Sheets integration"""
     # Database connection
     connected = await db_service.connect()
     if not connected:
@@ -1463,10 +1513,10 @@ async def startup_event():
     else:
         print("⚠️ Google Sheets service failed to initialize - check creds.json")
 
-    print("🎯 Enhanced Call Queue Manager with Google Sheets initialized")
+    print("🎯 Enhanced Call Queue Manager with Real-time Google Sheets initialized")
     print("🌐 Call Center Console ready - access at /console")
     print("📊 Transcript Dashboard available at /dashboard")
-    print("📋 Enter Google Sheet ID in console to start automated calls")
+    print("📋 Enter Google Sheet ID in console to start automated calls with real-time monitoring")
 
 
 @app.on_event("shutdown")
@@ -1474,14 +1524,16 @@ async def shutdown_event():
     """Close connections and cleanup on shutdown"""
     await db_service.disconnect()
     await call_queue_manager.stop_monitoring()
+    await drive_notification_service.stop_all_monitoring()
 
 
 def main():
-    print("🚀 Starting Aveya IVF Voice Assistant Server with Google Sheets Integration...")
+    print("🚀 Starting Aveya IVF Voice Assistant Server with Real-time Google Sheets Integration...")
     print("📊 Dashboard: http://localhost:8090/dashboard")
     print("🎮 Console: http://localhost:8090/console")
     print("🔗 API Status: http://localhost:8090/status")
-    print("📋 Google Sheets Integration: Connect via console")
+    print("📋 Real-time Google Sheets Integration: Connect via console")
+    print("🔔 Google Drive API Push Notifications: Enabled for instant updates")
     uvicorn.run(app, host="0.0.0.0", port=settings.PORT)
 
 

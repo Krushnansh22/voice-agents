@@ -1,5 +1,5 @@
 """
-Enhanced Call Queue Manager with Google Sheets Integration and Monitoring
+Fixed Call Queue Manager - Remove check_interval parameter
 """
 import asyncio
 import logging
@@ -193,10 +193,9 @@ class EnhancedCallQueueManager:
 
             from google_sheets_service import google_sheets_service
 
-            # Start monitoring with callback
+            # Start monitoring with callback - FIXED: Removed check_interval parameter
             await google_sheets_service.start_monitoring(
-                callback_func=self._handle_new_records,
-                check_interval=30
+                callback_func=self._handle_new_records
             )
 
             self.monitoring_enabled = True
@@ -432,11 +431,16 @@ class EnhancedCallQueueManager:
         for key, value in self.stats.items():
             serialized_stats[key] = serialize_datetime(value)
 
+        # Calculate dynamic progress percentage based on current total
+        progress_percentage = 0
+        if self.total_records > 0:
+            progress_percentage = (self.current_index / self.total_records * 100)
+
         return {
             "status": self.status.value,
             "total_records": self.total_records,
             "current_index": self.current_index,
-            "progress_percentage": (self.current_index / self.total_records * 100) if self.total_records > 0 else 0,
+            "progress_percentage": min(progress_percentage, 100),  # Cap at 100%
             "remaining_calls": max(0, self.total_records - self.current_index),
             "connected_sheet_id": self.connected_sheet_id,
             "sheet_info": self.sheet_connection_info,
@@ -446,7 +450,8 @@ class EnhancedCallQueueManager:
             "current_record": self.records[self.current_index].to_dict() if self.current_index < len(
                 self.records) else None,
             "call_in_progress": self._call_in_progress,
-            "stop_pending": self._stop_after_current_call
+            "stop_pending": self._stop_after_current_call,
+            "queue_can_grow": True  # Indicate that queue can receive new records
         }
 
     async def get_records_summary(self) -> Dict:
@@ -510,18 +515,17 @@ class EnhancedCallQueueManager:
         """Move to the next record in the queue"""
         self.current_index += 1
 
+        # DON'T mark as completed when reaching end - allow for new records
         if self.current_index >= self.total_records:
-            self.status = QueueStatus.COMPLETED
-            self.stats["queue_completed_at"] = datetime.now()
-            await self.stop_monitoring()  # Stop monitoring when queue completes
-            logger.info("All calls completed!")
+            logger.info("Reached end of current queue - waiting for new records or manual stop")
+            # Keep status as RUNNING to allow new records to be processed
+            # Only mark as COMPLETED if explicitly stopped
 
     async def _calling_loop(self):
-        """Internal calling loop with Google Sheets integration"""
+        """Internal calling loop with Google Sheets integration - supports dynamic growth"""
         try:
-            while (self.current_index < self.total_records and
-                not self._should_stop and
-                self.status in [QueueStatus.RUNNING, QueueStatus.PAUSED]):
+            while (not self._should_stop and
+                   self.status in [QueueStatus.RUNNING, QueueStatus.PAUSED]):
 
                 if self._should_stop:
                     logger.info("🛑 Stop flag detected - exiting calling loop")
@@ -529,6 +533,13 @@ class EnhancedCallQueueManager:
 
                 if self.status == QueueStatus.PAUSED:
                     await asyncio.sleep(1)
+                    continue
+
+                # Check if we have more records to process
+                if self.current_index >= self.total_records:
+                    # No more records currently, wait for new ones
+                    logger.info("⏳ Waiting for new records to be added...")
+                    await asyncio.sleep(5)  # Wait 5 seconds before checking again
                     continue
 
                 current_record = self.get_current_record()
@@ -586,12 +597,8 @@ class EnhancedCallQueueManager:
                     logger.info(f"📝 Current record already processed or invalid, moving to next")
                     await self.move_to_next_record()
 
-            if self.current_index >= self.total_records and not self._should_stop:
-                self.status = QueueStatus.COMPLETED
-                self.stats["queue_completed_at"] = datetime.now()
-                await self.stop_monitoring()
-                logger.info("🎉 All calls in queue completed!")
-            elif self._should_stop:
+            # Only mark as stopped if explicitly requested
+            if self._should_stop:
                 self.status = QueueStatus.STOPPED
                 logger.info("🛑 Queue stopped as requested")
 

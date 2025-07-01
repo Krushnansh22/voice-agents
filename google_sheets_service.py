@@ -1,6 +1,6 @@
 """
-Streamlined Google Sheets Service for Call Center Integration
-Combines reading patient records and writing results to multiple worksheets
+Updated Google Sheets Service with Google Drive API Push Notifications
+Real-time monitoring using official Google Drive API
 """
 import asyncio
 import logging
@@ -14,21 +14,24 @@ logger = logging.getLogger(__name__)
 
 
 class GoogleSheetsService:
-    """Enhanced Google Sheets service with monitoring and multi-worksheet support"""
+    """Enhanced Google Sheets service with real-time Drive API monitoring"""
 
     def __init__(self, credentials_file: str = "credentials.json"):
         self.credentials_file = credentials_file
         self.client = None
         self.current_spreadsheet = None
         self.current_sheet = None
-        self.last_row_count = 0
         self.sheet_id = None
-        self.monitoring_active = False
-        self._monitor_task = None
         self.executor = ThreadPoolExecutor(max_workers=4)
 
-        # Callbacks for new data detection
+        # Real-time monitoring
+        self.monitoring_active = False
         self.new_records_callback = None
+        self.drive_monitoring_enabled = False
+
+        # Cache for efficiency
+        self.last_row_count = 0
+        self.last_known_data = []
 
         # Worksheet mappings
         self.worksheets = {
@@ -59,7 +62,6 @@ class GoogleSheetsService:
     async def initialize(self) -> bool:
         """Initialize Google Sheets client"""
         try:
-            # Setup credentials with both Sheets and Drive access
             scopes = [
                 "https://www.googleapis.com/auth/spreadsheets",
                 "https://www.googleapis.com/auth/drive"
@@ -70,7 +72,6 @@ class GoogleSheetsService:
                 scopes=scopes
             )
 
-            # Initialize client in thread pool
             self.client = await asyncio.get_event_loop().run_in_executor(
                 self.executor, lambda: gspread.authorize(creds)
             )
@@ -83,7 +84,7 @@ class GoogleSheetsService:
             return False
 
     async def connect_to_sheet(self, sheet_id: str, worksheet_name: str = "Records") -> Dict:
-        """Connect to Google Sheet and setup all worksheets"""
+        """Connect to Google Sheet and setup monitoring"""
         try:
             logger.info(f"🔗 Connecting to Google Sheet: {sheet_id}")
 
@@ -99,11 +100,12 @@ class GoogleSheetsService:
 
             self.sheet_id = sheet_id
 
-            # Get initial row count
+            # Get initial data and row count
             all_values = await asyncio.get_event_loop().run_in_executor(
                 self.executor, lambda: self.current_sheet.get_all_values()
             )
             self.last_row_count = len(all_values)
+            self.last_known_data = all_values
 
             # Validate main sheet structure
             validation_result = await self._validate_sheet_structure()
@@ -116,14 +118,22 @@ class GoogleSheetsService:
             # Setup result worksheets
             await self._setup_result_worksheets()
 
+            # Setup Drive API monitoring
+            drive_setup_success = await self._setup_drive_monitoring()
+
             logger.info(f"✅ Connected to sheet with {self.last_row_count} rows")
+            if drive_setup_success:
+                logger.info("🔔 Real-time monitoring enabled via Google Drive API")
+            else:
+                logger.warning("⚠️ Real-time monitoring not available - continuing without it")
 
             return {
                 "success": True,
                 "sheet_id": sheet_id,
                 "worksheet_name": self.current_sheet.title,
                 "total_rows": self.last_row_count,
-                "data_rows": max(0, self.last_row_count - 1)
+                "data_rows": max(0, self.last_row_count - 1),
+                "monitoring_enabled": self.drive_monitoring_enabled
             }
 
         except Exception as e:
@@ -132,6 +142,128 @@ class GoogleSheetsService:
                 "success": False,
                 "error": str(e)
             }
+
+    async def _setup_drive_monitoring(self) -> bool:
+        """Setup Google Drive API monitoring for real-time updates"""
+        try:
+            from drive_api_integration import drive_notification_service
+            from settings import settings
+
+            # Initialize Drive notification service
+            webhook_url = f"{settings.HOST_URL}/api/drive-webhook"
+
+            if not drive_notification_service.drive_service:
+                initialized = await drive_notification_service.initialize(webhook_url)
+                if not initialized:
+                    logger.warning("⚠️ Could not initialize Drive notifications")
+                    return False
+
+            # Setup file monitoring
+            result = await drive_notification_service.setup_file_monitoring(
+                self.sheet_id,
+                callback=self._handle_drive_notification
+            )
+
+            if result["success"]:
+                self.drive_monitoring_enabled = True
+                logger.info("✅ Real-time Drive API monitoring enabled")
+                return True
+            else:
+                logger.warning(f"⚠️ Could not setup Drive monitoring: {result.get('error')}")
+                return False
+
+        except Exception as e:
+            logger.warning(f"⚠️ Could not setup Drive monitoring: {e}")
+            return False
+
+    async def _handle_drive_notification(self, file_id: str, resource_state: str):
+        """Handle notification from Google Drive API"""
+        try:
+            logger.info(f"📡 Drive notification: {file_id} - {resource_state}")
+
+            if file_id != self.sheet_id:
+                logger.warning(f"⚠️ Received notification for different file: {file_id}")
+                return
+
+            if resource_state in ['update', 'change']:
+                # Wait a moment for changes to propagate
+                await asyncio.sleep(2)
+
+                # Check for new records
+                new_records = await self._check_for_real_changes()
+
+                if new_records and self.new_records_callback:
+                    logger.info(f"🆕 Found {len(new_records)} new records via Drive notification")
+                    await self.new_records_callback(new_records)
+
+        except Exception as e:
+            logger.error(f"❌ Error handling Drive notification: {e}")
+
+    async def _check_for_real_changes(self) -> List[Dict]:
+        """Check for actual new records (called by Drive notification)"""
+        try:
+            # Get current data
+            current_values = await asyncio.get_event_loop().run_in_executor(
+                self.executor, lambda: self.current_sheet.get_all_values()
+            )
+
+            current_row_count = len(current_values)
+
+            # Check if new rows were added
+            if current_row_count > self.last_row_count:
+                new_row_count = current_row_count - self.last_row_count
+                logger.info(f"🆕 Detected {new_row_count} new rows via Drive API")
+
+                new_records = []
+                header_row = current_values[0] if current_values else []
+
+                # Process new rows
+                for row_num in range(self.last_row_count, current_row_count):
+                    try:
+                        row_values = current_values[row_num]
+
+                        # Skip empty rows
+                        if not any(row_values):
+                            continue
+
+                        # Create record dict
+                        record_dict = {}
+                        for i, header in enumerate(header_row):
+                            value = row_values[i] if i < len(row_values) else ''
+                            record_dict[header] = value
+
+                        # Clean and validate
+                        phone = str(record_dict.get('Phone Number', '')).strip()
+                        name = str(record_dict.get('Name', '')).strip()
+
+                        if phone and name and phone.lower() not in ['', 'nan', 'none']:
+                            clean_record = {
+                                'name': name,
+                                'phone': phone,
+                                'address': str(record_dict.get('Address', '')).strip(),
+                                'age': str(record_dict.get('Age', '')).strip(),
+                                'gender': str(record_dict.get('Gender', '')).strip(),
+                                'row_number': row_num + 1
+                            }
+                            new_records.append(clean_record)
+
+                    except Exception as e:
+                        logger.warning(f"⚠️ Error processing new row {row_num + 1}: {e}")
+
+                # Update cache
+                self.last_row_count = current_row_count
+                self.last_known_data = current_values
+
+                return new_records
+
+            else:
+                # No new rows, but might be edits - you can implement edit detection here
+                logger.info("📝 Sheet changed but no new rows detected")
+                return []
+
+        except Exception as e:
+            logger.error(f"❌ Error checking for real changes: {e}")
+            return []
 
     async def _validate_sheet_structure(self) -> Dict:
         """Validate that the main sheet has required columns"""
@@ -251,75 +383,36 @@ class GoogleSheetsService:
             logger.error(f"❌ Failed to read records: {e}")
             return [], [f"Failed to read sheet: {str(e)}"]
 
-    async def check_for_new_records(self) -> Tuple[List[Dict], int]:
-        """Check if new records have been added to the sheet"""
+    async def start_monitoring(self, callback_func=None):
+        """Start monitoring the sheet for new records"""
         try:
-            if not self.current_sheet:
-                return [], 0
+            self.monitoring_active = True
+            self.new_records_callback = callback_func
 
-            # Get current row count
-            all_values = await asyncio.get_event_loop().run_in_executor(
-                self.executor, lambda: self.current_sheet.get_all_values()
-            )
-            current_row_count = len(all_values)
-
-            # Check if new rows were added
-            if current_row_count > self.last_row_count:
-                new_row_count = current_row_count - self.last_row_count
-                logger.info(f"🆕 Detected {new_row_count} new rows in sheet")
-
-                new_records = []
-
-                # Get records starting from the last known row
-                for row_num in range(self.last_row_count + 1, current_row_count + 1):
-                    try:
-                        row_values = await asyncio.get_event_loop().run_in_executor(
-                            self.executor, lambda: self.current_sheet.row_values(row_num)
-                        )
-
-                        # Skip empty rows
-                        if not any(row_values):
-                            continue
-
-                        # Map to record format
-                        header_row = await asyncio.get_event_loop().run_in_executor(
-                            self.executor, lambda: self.current_sheet.row_values(1)
-                        )
-
-                        # Create record dict
-                        record_dict = {}
-                        for i, header in enumerate(header_row):
-                            value = row_values[i] if i < len(row_values) else ''
-                            record_dict[header] = value
-
-                        # Clean and validate
-                        phone = str(record_dict.get('Phone Number', '')).strip()
-                        name = str(record_dict.get('Name', '')).strip()
-
-                        if phone and name and phone.lower() not in ['', 'nan', 'none']:
-                            clean_record = {
-                                'name': name,
-                                'phone': phone,
-                                'address': str(record_dict.get('Address', '')).strip(),
-                                'age': str(record_dict.get('Age', '')).strip(),
-                                'gender': str(record_dict.get('Gender', '')).strip(),
-                                'row_number': row_num
-                            }
-                            new_records.append(clean_record)
-
-                    except Exception as e:
-                        logger.warning(f"⚠️ Error processing new row {row_num}: {e}")
-
-                # Update last known row count
-                self.last_row_count = current_row_count
-                return new_records, new_row_count
-
-            return [], 0
+            if self.drive_monitoring_enabled:
+                logger.info("🔍 Real-time monitoring active via Google Drive API")
+            else:
+                logger.info("🔍 Real-time monitoring not available - Drive API setup failed")
 
         except Exception as e:
-            logger.error(f"❌ Error checking for new records: {e}")
-            return [], 0
+            logger.error(f"Failed to start monitoring: {e}")
 
+    async def stop_monitoring(self):
+        """Stop monitoring the sheet"""
+        try:
+            self.monitoring_active = False
+
+            if self.drive_monitoring_enabled:
+                from drive_api_integration import drive_notification_service
+                await drive_notification_service.stop_all_monitoring()
+                self.drive_monitoring_enabled = False
+
+            logger.info("🛑 Stopped monitoring sheet")
+
+        except Exception as e:
+            logger.error(f"Error stopping monitoring: {e}")
+
+    # Append methods (unchanged from original)
     async def append_appointment(self, appointment_details: Dict, patient_record: Dict) -> bool:
         """Append successful appointment to Appointment_Details worksheet"""
         try:
@@ -453,61 +546,13 @@ class GoogleSheetsService:
             logger.error(f"❌ Failed to save incomplete call: {e}")
             return False
 
-    async def start_monitoring(self, callback_func=None, check_interval: int = 30):
-        """Start monitoring the sheet for new records"""
-        if self.monitoring_active:
-            logger.warning("⚠️ Monitoring already active")
-            return
-
-        self.monitoring_active = True
-        self.new_records_callback = callback_func
-
-        self._monitor_task = asyncio.create_task(
-            self._monitor_loop(check_interval)
-        )
-
-        logger.info(f"🔍 Started monitoring sheet for new records (interval: {check_interval}s)")
-
-    async def stop_monitoring(self):
-        """Stop monitoring the sheet"""
-        self.monitoring_active = False
-
-        if self._monitor_task and not self._monitor_task.done():
-            self._monitor_task.cancel()
-            try:
-                await self._monitor_task
-            except asyncio.CancelledError:
-                pass
-
-        logger.info("🛑 Stopped monitoring sheet")
-
-    async def _monitor_loop(self, check_interval: int):
-        """Internal monitoring loop"""
-        try:
-            while self.monitoring_active:
-                try:
-                    new_records, new_count = await self.check_for_new_records()
-
-                    if new_records and self.new_records_callback:
-                        logger.info(f"🆕 Found {len(new_records)} new records, notifying callback")
-                        await self.new_records_callback(new_records)
-
-                except Exception as e:
-                    logger.error(f"❌ Error in monitoring loop: {e}")
-
-                await asyncio.sleep(check_interval)
-
-        except asyncio.CancelledError:
-            logger.info("📊 Monitoring loop cancelled")
-        except Exception as e:
-            logger.error(f"❌ Monitoring loop error: {e}")
-
     def get_status(self) -> Dict:
         """Get current service status"""
         return {
             "connected": self.current_sheet is not None,
             "sheet_id": self.sheet_id,
             "monitoring_active": self.monitoring_active,
+            "drive_monitoring_enabled": self.drive_monitoring_enabled,
             "last_row_count": self.last_row_count,
             "worksheet_name": self.current_sheet.title if self.current_sheet else None,
             "spreadsheet_title": self.current_spreadsheet.title if self.current_spreadsheet else None

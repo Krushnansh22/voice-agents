@@ -15,522 +15,255 @@
             font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
             background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
             min-height: 100vh;
-            color: #333;
+            padding: 20px;
         }
 
-        .console-container {
-            max-width: 1600px;
+        .container {
+            max-width: 1400px;
             margin: 0 auto;
-            padding: 20px;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            overflow: hidden;
         }
 
         .header {
-            background: rgba(255, 255, 255, 0.95);
-            backdrop-filter: blur(10px);
-            border-radius: 15px;
-            padding: 25px 35px;
-            margin-bottom: 25px;
-            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
-            border: 1px solid rgba(255, 255, 255, 0.2);
+            background: linear-gradient(135deg, #2c3e50 0%, #3498db 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
         }
 
         .header h1 {
-            color: #2c3e50;
-            font-size: 2.4em;
+            font-size: 2.5rem;
+            margin-bottom: 10px;
             font-weight: 600;
-            margin-bottom: 8px;
-            display: flex;
-            align-items: center;
-            gap: 15px;
         }
 
         .header p {
-            color: #7f8c8d;
-            font-size: 1.1em;
+            font-size: 1.1rem;
+            opacity: 0.9;
         }
 
-        .main-grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 25px;
-            margin-bottom: 25px;
-        }
-
-        .control-panel {
-            background: rgba(255, 255, 255, 0.95);
-            backdrop-filter: blur(10px);
-            border-radius: 15px;
+        .main-content {
             padding: 30px;
-            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
-            border: 1px solid rgba(255, 255, 255, 0.2);
         }
 
-        .panel-title {
-            font-size: 1.4em;
-            font-weight: 600;
+        .section {
+            background: #f8f9fa;
+            border-radius: 15px;
+            padding: 25px;
+            margin-bottom: 25px;
+            border: 1px solid #e9ecef;
+        }
+
+        .section h2 {
             color: #2c3e50;
             margin-bottom: 20px;
+            font-size: 1.5rem;
             display: flex;
             align-items: center;
             gap: 10px;
         }
 
-        /* Google Sheets Connection Section */
-        .sheets-section {
-            margin-bottom: 30px;
-            padding: 25px;
-            background: #f8f9fa;
-            border-radius: 12px;
-            border: 2px solid #dee2e6;
-            transition: all 0.3s ease;
-        }
-
-        .sheets-section.connected {
-            border-color: #28a745;
-            background: #d4edda;
-        }
-
-        .sheet-input-group {
-            display: flex;
-            gap: 10px;
-            margin-bottom: 15px;
-        }
-
-        .sheet-id-input {
-            flex: 1;
-            padding: 12px 16px;
-            border: 2px solid #dee2e6;
-            border-radius: 8px;
-            font-size: 1em;
-            font-family: 'Courier New', monospace;
-            background: white;
-            transition: border-color 0.3s ease;
-        }
-
-        .sheet-id-input:focus {
-            outline: none;
-            border-color: #667eea;
-            box-shadow: 0 0 0 3px rgba(102, 126, 234, 0.1);
-        }
-
-        .sheet-connect-btn {
-            padding: 12px 20px;
-            background: linear-gradient(135deg, #28a745, #20c997);
-            color: white;
-            border: none;
-            border-radius: 8px;
-            font-size: 1em;
-            font-weight: 500;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-
-        .sheet-connect-btn:hover:not(:disabled) {
-            transform: translateY(-2px);
-            box-shadow: 0 4px 15px rgba(40, 167, 69, 0.4);
-        }
-
-        .sheet-connect-btn:disabled {
-            opacity: 0.6;
-            cursor: not-allowed;
-        }
-
-        .sheet-info {
-            margin-top: 15px;
-            padding: 12px;
-            background: #e8f5e8;
-            border-radius: 8px;
-            border-left: 4px solid #28a745;
-            display: none;
-        }
-
-        .sheet-info.show {
-            display: block;
-        }
-
-        .sheet-help {
-            font-size: 0.9em;
-            color: #6c757d;
-            margin-top: 10px;
-            padding: 10px;
-            background: #f1f3f4;
-            border-radius: 6px;
-        }
-
-        .sheet-help a {
-            color: #667eea;
-            text-decoration: none;
-        }
-
-        .sheet-help a:hover {
-            text-decoration: underline;
-        }
-
-        .upload-section {
-            margin-bottom: 30px;
-            padding: 25px;
-            background: #f8f9fa;
-            border-radius: 12px;
-            border: 2px dashed #dee2e6;
-            transition: all 0.3s ease;
-            display: none; /* Hidden by default, shown when no sheet connected */
-        }
-
-        .upload-section.show {
-            display: block;
-        }
-
-        .file-input-wrapper {
-            position: relative;
-            display: inline-block;
-            cursor: pointer;
-            width: 100%;
-        }
-
-        .file-input {
-            display: none;
-        }
-
-        .file-input-button {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 10px;
-            padding: 15px 25px;
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            border: none;
-            border-radius: 8px;
-            font-size: 1em;
-            font-weight: 500;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            width: 100%;
-        }
-
-        .file-input-button:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 4px 15px rgba(102, 126, 234, 0.4);
-        }
-
-        .file-info {
-            margin-top: 15px;
-            padding: 12px;
-            background: #e8f5e8;
-            border-radius: 8px;
-            border-left: 4px solid #28a745;
-            display: none;
-        }
-
-        .file-info.show {
-            display: block;
-        }
-
-        .controls-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-            gap: 15px;
-            margin-bottom: 25px;
-        }
-
-        .control-btn {
-            padding: 12px 20px;
-            border: none;
-            border-radius: 8px;
-            font-size: 0.95em;
-            font-weight: 500;
-            cursor: pointer;
-            transition: all 0.3s ease;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 8px;
-        }
-
-        .control-btn:disabled {
-            opacity: 0.6;
-            cursor: not-allowed;
-        }
-
-        .control-btn:not(:disabled):hover {
-            transform: translateY(-2px);
-            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
-        }
-
-        .btn-start {
-            background: linear-gradient(135deg, #28a745, #20c997);
-            color: white;
-        }
-
-        .btn-pause {
-            background: linear-gradient(135deg, #ffc107, #fd7e14);
-            color: white;
-        }
-
-        .btn-stop {
-            background: linear-gradient(135deg, #dc3545, #e83e8c);
-            color: white;
-        }
-
-        .btn-skip {
-            background: linear-gradient(135deg, #6c757d, #495057);
-            color: white;
-        }
-
-        .btn-reset {
-            background: linear-gradient(135deg, #17a2b8, #007bff);
-            color: white;
-        }
-
-        .btn-disconnect {
-            background: linear-gradient(135deg, #6c757d, #495057);
-            color: white;
-        }
-
-        .status-section {
-            background: #f8f9fa;
-            border-radius: 12px;
-            padding: 20px;
-        }
-
-        .status-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
-            gap: 15px;
+        .input-group {
             margin-bottom: 20px;
         }
 
-        .status-item {
-            text-align: center;
-            padding: 15px;
-            background: white;
-            border-radius: 8px;
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-        }
-
-        .status-value {
-            font-size: 1.8em;
-            font-weight: 700;
-            margin-bottom: 5px;
-        }
-
-        .status-label {
-            font-size: 0.85em;
-            color: #6c757d;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-        }
-
-        .status-badge {
-            display: inline-block;
-            padding: 6px 12px;
-            border-radius: 20px;
-            font-size: 0.85em;
+        .input-group label {
+            display: block;
+            margin-bottom: 8px;
             font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
+            color: #34495e;
         }
 
-        .status-idle { background: #e9ecef; color: #495057; }
-        .status-running { background: #d4edda; color: #155724; }
-        .status-paused { background: #fff3cd; color: #856404; }
-        .status-stopped { background: #f8d7da; color: #721c24; }
-        .status-completed { background: #d1ecf1; color: #0c5460; }
-        .status-error { background: #f5c6cb; color: #721c24; }
-
-        .progress-section {
-            margin-top: 20px;
-        }
-
-        .progress-bar {
+        .input-group input {
             width: 100%;
-            height: 25px;
-            background: #e9ecef;
-            border-radius: 12px;
-            overflow: hidden;
+            padding: 12px 15px;
+            border: 2px solid #ddd;
+            border-radius: 8px;
+            font-size: 16px;
+            transition: border-color 0.3s;
+        }
+
+        .input-group input:focus {
+            outline: none;
+            border-color: #3498db;
+        }
+
+        .button {
+            background: linear-gradient(135deg, #3498db 0%, #2980b9 100%);
+            color: white;
+            border: none;
+            padding: 12px 25px;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s;
+            margin-right: 10px;
             margin-bottom: 10px;
         }
 
-        .progress-fill {
-            height: 100%;
-            background: linear-gradient(90deg, #28a745, #20c997);
-            transition: width 0.5s ease;
-            border-radius: 12px;
-            position: relative;
+        .button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(52, 152, 219, 0.3);
         }
 
-        .progress-text {
-            position: absolute;
-            width: 100%;
-            text-align: center;
-            line-height: 25px;
-            font-size: 0.85em;
+        .button:disabled {
+            background: #bdc3c7;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+
+        .button.danger {
+            background: linear-gradient(135deg, #e74c3c 0%, #c0392b 100%);
+        }
+
+        .status-card {
+            background: white;
+            border-radius: 10px;
+            padding: 20px;
+            margin-bottom: 15px;
+            border-left: 4px solid #3498db;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+
+        .status-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 8px;
+        }
+
+        .status-label {
             font-weight: 600;
-            color: white;
-            text-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+            color: #2c3e50;
         }
 
-        .statistics-panel {
-            background: rgba(255, 255, 255, 0.95);
-            backdrop-filter: blur(10px);
-            border-radius: 15px;
-            padding: 30px;
-            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
-            border: 1px solid rgba(255, 255, 255, 0.2);
+        .status-value {
+            color: #34495e;
+        }
+
+        .status-connected {
+            color: #27ae60;
+            font-weight: 600;
+        }
+
+        .status-disconnected {
+            color: #e74c3c;
+            font-weight: 600;
+        }
+
+        .status-running {
+            color: #27ae60;
+            font-weight: 600;
+        }
+
+        .status-paused {
+            color: #f39c12;
+            font-weight: 600;
+        }
+
+        .status-stopped {
+            color: #e74c3c;
+            font-weight: 600;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 25px;
+        }
+
+        @media (max-width: 768px) {
+            .grid {
+                grid-template-columns: 1fr;
+            }
+        }
+
+        .alert {
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+
+        .alert.success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+
+        .alert.error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+
+        .alert.info {
+            background: #d1ecf1;
+            color: #0c5460;
+            border: 1px solid #bee5eb;
         }
 
         .stats-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 20px;
+            gap: 15px;
+            margin-top: 20px;
         }
 
         .stat-card {
-            background: linear-gradient(135deg, #f8f9fa, #e9ecef);
-            border-radius: 12px;
+            background: white;
             padding: 20px;
+            border-radius: 10px;
             text-align: center;
-            border-left: 4px solid;
+            border: 1px solid #e9ecef;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.05);
         }
 
-        .stat-card.appointments { border-left-color: #28a745; }
-        .stat-card.reschedules { border-left-color: #ffc107; }
-        .stat-card.incomplete { border-left-color: #6c757d; }
-        .stat-card.failed { border-left-color: #dc3545; }
-
         .stat-number {
-            font-size: 2.2em;
+            font-size: 2rem;
             font-weight: 700;
-            margin-bottom: 8px;
+            color: #3498db;
+            margin-bottom: 5px;
         }
 
         .stat-label {
-            font-size: 0.9em;
-            color: #6c757d;
-            font-weight: 500;
-        }
-
-        .current-call-section {
-            grid-column: 1 / -1;
-            background: #f8f9fa;
-            border-radius: 12px;
-            padding: 25px;
-            margin-top: 25px;
-        }
-
-        .current-call-info {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-            gap: 15px;
-            margin-bottom: 20px;
-        }
-
-        .info-item {
-            background: white;
-            padding: 15px;
-            border-radius: 8px;
-            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-        }
-
-        .info-label {
-            font-size: 0.8em;
-            color: #6c757d;
+            color: #7f8c8d;
+            font-size: 0.9rem;
             text-transform: uppercase;
-            margin-bottom: 5px;
+            letter-spacing: 1px;
         }
 
-        .info-value {
-            font-size: 1.1em;
-            font-weight: 600;
-            color: #2c3e50;
-        }
-
-        .alerts-section {
-            margin-top: 20px;
-        }
-
-        .alert {
-            padding: 12px 16px;
-            border-radius: 8px;
-            margin-bottom: 10px;
-            font-weight: 500;
-            display: none;
-        }
-
-        .alert.show {
-            display: block;
-        }
-
-        .alert-success {
-            background: #d4edda;
+        .realtime-indicator {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px 12px;
+            background: #e8f5e8;
+            border: 1px solid #c3e6cb;
+            border-radius: 20px;
+            font-size: 0.9rem;
             color: #155724;
-            border-left: 4px solid #28a745;
+            margin-top: 10px;
         }
 
-        .alert-error {
-            background: #f8d7da;
-            color: #721c24;
-            border-left: 4px solid #dc3545;
-        }
-
-        .alert-warning {
-            background: #fff3cd;
-            color: #856404;
-            border-left: 4px solid #ffc107;
-        }
-
-        .alert-info {
-            background: #d1ecf1;
-            color: #0c5460;
-            border-left: 4px solid #17a2b8;
-        }
-
-        .logs-section {
-            background: #1e1e1e;
-            border-radius: 12px;
-            padding: 20px;
-            margin-top: 20px;
-            max-height: 300px;
-            overflow-y: auto;
-        }
-
-        .log-entry {
-            color: #e9ecef;
-            font-family: 'Courier New', monospace;
-            font-size: 0.85em;
-            margin-bottom: 5px;
-            padding: 3px 0;
-        }
-
-        .log-timestamp {
-            color: #6c757d;
-        }
-
-        .log-level-info { color: #17a2b8; }
-        .log-level-warning { color: #ffc107; }
-        .log-level-error { color: #dc3545; }
-        .log-level-success { color: #28a745; }
-
-        /* Loading animations */
-        .loading {
-            display: inline-block;
-            width: 20px;
-            height: 20px;
-            border: 3px solid rgba(255, 255, 255, 0.3);
+        .realtime-indicator.active::before {
+            content: '';
+            width: 8px;
+            height: 8px;
+            background: #28a745;
             border-radius: 50%;
-            border-top-color: #fff;
-            animation: spin 1s ease-in-out infinite;
-        }
-
-        @keyframes spin {
-            to { transform: rotate(360deg); }
-        }
-
-        .pulse {
             animation: pulse 2s infinite;
+        }
+
+        .realtime-indicator.inactive::before {
+            content: '';
+            width: 8px;
+            height: 8px;
+            background: #dc3545;
+            border-radius: 50%;
         }
 
         @keyframes pulse {
@@ -539,763 +272,607 @@
             100% { opacity: 1; }
         }
 
-        /* Responsive Design */
-        @media (max-width: 1200px) {
-            .main-grid {
-                grid-template-columns: 1fr;
-            }
+        .current-record {
+            background: linear-gradient(135deg, #74b9ff 0%, #0984e3 100%);
+            color: white;
+            padding: 20px;
+            border-radius: 10px;
+            margin-top: 15px;
         }
 
-        @media (max-width: 768px) {
-            .console-container {
-                padding: 15px;
-            }
+        .current-record h3 {
+            margin-bottom: 10px;
+        }
 
-            .header h1 {
-                font-size: 2em;
-            }
+        .record-details {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 10px;
+        }
 
-            .controls-grid {
-                grid-template-columns: 1fr 1fr;
-            }
+        .record-item {
+            background: rgba(255,255,255,0.1);
+            padding: 8px 12px;
+            border-radius: 5px;
+        }
 
-            .status-grid {
-                grid-template-columns: 1fr 1fr;
-            }
+        .queue-controls {
+            display: flex;
+            gap: 10px;
+            flex-wrap: wrap;
+            margin-top: 20px;
+        }
 
-            .stats-grid {
-                grid-template-columns: 1fr;
-            }
+        .loading {
+            display: inline-block;
+            width: 20px;
+            height: 20px;
+            border: 3px solid #f3f3f3;
+            border-top: 3px solid #3498db;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .hidden {
+            display: none;
+        }
+
+        .dynamic-records-info {
+            background: linear-gradient(135deg, #00b894 0%, #00a085 100%);
+            color: white;
+            padding: 15px;
+            border-radius: 10px;
+            margin-top: 15px;
+            text-align: center;
+        }
+
+        .monitoring-status {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-top: 10px;
         }
     </style>
 </head>
 <body>
-    <div class="console-container">
+    <div class="container">
         <div class="header">
-            <h1>📊 Aveya IVF - Call Center Console</h1>
-            <p>Automated appointment booking system with Google Sheets integration</p>
+            <h1>🎯 Aveya IVF Call Center Console</h1>
+            <p>Real-time Google Sheets Integration with Automated Calling</p>
         </div>
 
-        <div class="alerts-section" id="alertsSection"></div>
+        <div class="main-content">
+            <!-- Connection Status Alert -->
+            <div id="connectionAlert" class="alert info hidden">
+                Real-time monitoring enabled! New records will be automatically detected.
+            </div>
 
-        <div class="main-grid">
-            <!-- Control Panel -->
-            <div class="control-panel">
-                <h2 class="panel-title">🎮 Control Panel</h2>
+            <div class="grid">
+                <!-- Google Sheets Connection -->
+                <div class="section">
+                    <h2>📊 Google Sheets Connection</h2>
 
-                <!-- Google Sheets Connection Section -->
-                <div class="sheets-section" id="sheetsSection">
-                    <h3 style="margin-bottom: 15px; color: #2c3e50;">📊 Google Sheets Connection</h3>
-
-                    <div class="sheet-input-group">
-                        <input
-                            type="text"
-                            id="sheetIdInput"
-                            class="sheet-id-input"
-                            placeholder="Enter Google Sheet ID (e.g., 1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms)"
-                            autocomplete="off"
-                        >
-                        <button class="sheet-connect-btn" id="connectSheetBtn" onclick="connectToSheet()">
-                            📊 Connect
-                        </button>
+                    <div class="input-group">
+                        <label for="sheetId">Google Sheet ID:</label>
+                        <input type="text" id="sheetId" placeholder="Enter your Google Sheet ID" />
                     </div>
 
-                    <div class="sheet-info" id="sheetInfo"></div>
+                    <div class="input-group">
+                        <label for="worksheetName">Worksheet Name:</label>
+                        <input type="text" id="worksheetName" value="Records" />
+                    </div>
 
-                    <div class="sheet-help">
-                        <strong>How to get Sheet ID:</strong><br>
-                        1. Open your Google Sheet<br>
-                        2. Copy the ID from URL: docs.google.com/spreadsheets/d/<strong>SHEET_ID</strong>/edit<br>
-                        3. Make sure your sheet is shared with the service account email<br>
-                        <br>
-                        <strong>Required worksheets:</strong> Records, Appointment_Details, Reschedule_Requests, Incomplete_Calls
+                    <button class="button" onclick="connectToSheet()">
+                        <span id="connectLoader" class="loading hidden"></span>
+                        Connect to Sheet
+                    </button>
+                    <button class="button warning" onclick="disconnectSheet()">Disconnect</button>
+
+                    <div id="sheetStatus" class="status-card hidden">
+                        <div class="status-row">
+                            <span class="status-label">Status:</span>
+                            <span id="sheetStatusValue" class="status-value">Disconnected</span>
+                        </div>
+                        <div class="status-row">
+                            <span class="status-label">Total Records:</span>
+                            <span id="totalRecords" class="status-value">0</span>
+                        </div>
+                        <div class="status-row">
+                            <span class="status-label">Valid Records:</span>
+                            <span id="validRecords" class="status-value">0</span>
+                        </div>
+
+                        <div class="monitoring-status">
+                            <span class="status-label">Real-time Monitoring:</span>
+                            <div id="realtimeIndicator" class="realtime-indicator inactive">
+                                <span>Inactive</span>
+                            </div>
+                        </div>
                     </div>
                 </div>
 
-                <!-- Legacy File Upload Section (fallback) -->
-                <div class="upload-section" id="uploadSection">
-                    <div class="file-input-wrapper">
-                        <input type="file" id="fileInput" class="file-input" accept=".xlsx,.xls">
-                        <button class="file-input-button" onclick="document.getElementById('fileInput').click()">
-                            📁 Upload Excel File (Legacy)
-                            <span style="font-size: 0.85em; opacity: 0.8;">(Use Google Sheets instead)</span>
-                        </button>
+                <!-- Queue Management -->
+                <div class="section">
+                    <h2>📞 Queue Management</h2>
+
+                    <div class="queue-controls">
+                        <button class="button success" onclick="startQueue()" id="startBtn">Start Queue</button>
+                        <button class="button warning" onclick="pauseQueue()" id="pauseBtn" disabled>Pause</button>
+                        <button class="button" onclick="resumeQueue()" id="resumeBtn" disabled>Resume</button>
+                        <button class="button danger" onclick="stopQueue()" id="stopBtn" disabled>Stop</button>
+                        <button class="button" onclick="resetQueue()" id="resetBtn">Reset</button>
+                        <button class="button warning" onclick="skipCurrent()" id="skipBtn" disabled>Skip Current</button>
                     </div>
-                    <div class="file-info" id="fileInfo"></div>
-                </div>
 
-                <!-- Control Buttons -->
-                <div class="controls-grid">
-                    <button class="control-btn btn-start" id="startBtn" onclick="startQueue()" disabled>
-                        ▶️ Start
-                    </button>
-                    <button class="control-btn btn-pause" id="pauseBtn" onclick="pauseQueue()" disabled>
-                        ⏸️ Pause
-                    </button>
-                    <button class="control-btn btn-stop" id="stopBtn" onclick="stopQueue()" disabled>
-                        ⏹️ Stop
-                    </button>
-                    <button class="control-btn btn-skip" id="skipBtn" onclick="skipCurrent()" disabled>
-                        ⏭️ Skip
-                    </button>
-                    <button class="control-btn btn-reset" id="resetBtn" onclick="resetQueue()" disabled>
-                        🔄 Reset
-                    </button>
-                    <button class="control-btn btn-disconnect" id="disconnectBtn" onclick="disconnectSheet()" disabled>
-                        🔌 Disconnect
-                    </button>
-                </div>
-
-                <!-- Status Section -->
-                <div class="status-section">
-                    <h3 style="margin-bottom: 15px; color: #2c3e50;">📊 Queue Status</h3>
-                    <div class="status-grid">
-                        <div class="status-item">
-                            <div class="status-value" style="color: #667eea;" id="totalRecords">0</div>
-                            <div class="status-label">Total Records</div>
+                    <div id="queueStatus" class="status-card">
+                        <div class="status-row">
+                            <span class="status-label">Queue Status:</span>
+                            <span id="queueStatusValue" class="status-value">Idle</span>
                         </div>
-                        <div class="status-item">
-                            <div class="status-value" style="color: #28a745;" id="completedCalls">0</div>
-                            <div class="status-label">Completed</div>
+                        <div class="status-row">
+                            <span class="status-label">Current Position:</span>
+                            <span id="currentPosition" class="status-value">0 / 0</span>
                         </div>
-                        <div class="status-item">
-                            <div class="status-value" style="color: #ffc107;" id="remainingCalls">0</div>
-                            <div class="status-label">Remaining</div>
+                        <div class="status-row">
+                            <span class="status-label">Remaining Calls:</span>
+                            <span id="remainingCalls" class="status-value">0</span>
                         </div>
-                        <div class="status-item">
-                            <span class="status-badge status-idle" id="queueStatus">IDLE</span>
+                        <div class="status-row">
+                            <span class="status-label">Call in Progress:</span>
+                            <span id="callInProgress" class="status-value">No</span>
                         </div>
                     </div>
 
-                    <!-- Progress Bar -->
-                    <div class="progress-section">
-                        <div class="progress-bar">
-                            <div class="progress-fill" id="progressFill" style="width: 0%">
-                                <div class="progress-text" id="progressText">0%</div>
+                    <!-- Dynamic Records Info -->
+                    <div id="dynamicRecordsInfo" class="dynamic-records-info hidden">
+                        <h4>🔄 Dynamic Queue Active</h4>
+                        <p>Queue can grow in real-time as new records are added to Google Sheets</p>
+                        <p>Add new rows to your sheet and watch them appear automatically!</p>
+                    </div>
+
+                    <!-- Current Record Display -->
+                    <div id="currentRecord" class="current-record hidden">
+                        <h3>📋 Current Record</h3>
+                        <div class="record-details">
+                            <div class="record-item">
+                                <strong>Name:</strong> <span id="recordName">-</span>
+                            </div>
+                            <div class="record-item">
+                                <strong>Phone:</strong> <span id="recordPhone">-</span>
+                            </div>
+                            <div class="record-item">
+                                <strong>Age:</strong> <span id="recordAge">-</span>
+                            </div>
+                            <div class="record-item">
+                                <strong>Gender:</strong> <span id="recordGender">-</span>
+                            </div>
+                            <div class="record-item">
+                                <strong>Row:</strong> <span id="recordRow">-</span>
+                            </div>
+                            <div class="record-item">
+                                <strong>Status:</strong> <span id="recordStatus">-</span>
                             </div>
                         </div>
                     </div>
                 </div>
             </div>
 
-            <!-- Statistics Panel -->
-            <div class="statistics-panel">
-                <h2 class="panel-title">📈 Call Statistics</h2>
-
+            <!-- Statistics -->
+            <div class="section">
+                <h2>📈 Call Statistics</h2>
                 <div class="stats-grid">
-                    <div class="stat-card appointments">
-                        <div class="stat-number" style="color: #28a745;" id="appointmentsCount">0</div>
-                        <div class="stat-label">Appointments Booked</div>
+                    <div class="stat-card">
+                        <div class="stat-number" id="totalCalls">0</div>
+                        <div class="stat-label">Total Calls</div>
                     </div>
-                    <div class="stat-card reschedules">
-                        <div class="stat-number" style="color: #ffc107;" id="reschedulesCount">0</div>
-                        <div class="stat-label">Reschedule Requests</div>
+                    <div class="stat-card">
+                        <div class="stat-number" id="appointments">0</div>
+                        <div class="stat-label">Appointments</div>
                     </div>
-                    <div class="stat-card incomplete">
-                        <div class="stat-number" style="color: #6c757d;" id="incompleteCount">0</div>
-                        <div class="stat-label">Incomplete Calls</div>
+                    <div class="stat-card">
+                        <div class="stat-number" id="reschedules">0</div>
+                        <div class="stat-label">Reschedules</div>
                     </div>
-                    <div class="stat-card failed">
-                        <div class="stat-number" style="color: #dc3545;" id="failedCount">0</div>
-                        <div class="stat-label">Failed Calls</div>
+                    <div class="stat-card">
+                        <div class="stat-number" id="incomplete">0</div>
+                        <div class="stat-label">Incomplete</div>
                     </div>
-                </div>
-
-                <!-- Current Call Info -->
-                <div class="current-call-section">
-                    <h3 style="margin-bottom: 15px; color: #2c3e50;">📞 Current Call</h3>
-                    <div class="current-call-info" id="currentCallInfo">
-                        <div class="info-item">
-                            <div class="info-label">Patient Name</div>
-                            <div class="info-value" id="currentPatientName">-</div>
-                        </div>
-                        <div class="info-item">
-                            <div class="info-label">Phone Number</div>
-                            <div class="info-value" id="currentPatientPhone">-</div>
-                        </div>
-                        <div class="info-item">
-                            <div class="info-label">Age / Gender</div>
-                            <div class="info-value" id="currentPatientInfo">-</div>
-                        </div>
-                        <div class="info-item">
-                            <div class="info-label">Address</div>
-                            <div class="info-value" id="currentPatientAddress">-</div>
-                        </div>
+                    <div class="stat-card">
+                        <div class="stat-number" id="failed">0</div>
+                        <div class="stat-label">Failed</div>
                     </div>
                 </div>
             </div>
-        </div>
 
-        <!-- Activity Logs -->
-        <div class="control-panel">
-            <h2 class="panel-title">📝 Activity Logs</h2>
-            <div class="logs-section" id="logsSection">
-                <div class="log-entry">
-                    <span class="log-timestamp">[2024-12-25 14:30:22]</span>
-                    <span class="log-level-info">[INFO]</span>
-                    System initialized and ready for Google Sheets integration
+            <!-- System Status -->
+            <div class="section">
+                <h2>⚡ System Status</h2>
+                <div class="status-card">
+                    <div class="status-row">
+                        <span class="status-label">Server Status:</span>
+                        <span id="serverStatus" class="status-value">Checking...</span>
+                    </div>
+                    <div class="status-row">
+                        <span class="status-label">Google Sheets Service:</span>
+                        <span id="sheetsService" class="status-value">Checking...</span>
+                    </div>
+                    <div class="status-row">
+                        <span class="status-label">Drive API Monitoring:</span>
+                        <span id="driveAPI" class="status-value">Checking...</span>
+                    </div>
+                    <div class="status-row">
+                        <span class="status-label">Database Connection:</span>
+                        <span id="dbStatus" class="status-value">Checking...</span>
+                    </div>
                 </div>
             </div>
         </div>
     </div>
 
     <script>
-        class CallCenterConsole {
-            constructor() {
-                this.statusUpdateInterval = null;
-                this.ws = null;
-                this.currentStatus = 'idle';
-                this.sheetConnected = false;
-                this.currentSheetId = null;
-
-                this.init();
-            }
-
-            init() {
-                // Initialize event listeners
-                document.getElementById('fileInput').addEventListener('change', this.handleFileUpload.bind(this));
-                document.getElementById('sheetIdInput').addEventListener('keypress', this.handleSheetIdKeypress.bind(this));
-
-                // Start status updates
-                this.startStatusUpdates();
-                this.connectWebSocket();
-
-                // Initial status fetch
-                this.fetchStatus();
-
-                this.log('System initialized and ready for Google Sheets integration', 'info');
-            }
-
-            handleSheetIdKeypress(event) {
-                if (event.key === 'Enter') {
-                    this.connectToSheet();
-                }
-            }
-
-            async connectToSheet() {
-                const sheetId = document.getElementById('sheetIdInput').value.trim();
-
-                if (!sheetId) {
-                    this.showAlert('Please enter a Google Sheet ID', 'warning');
-                    return;
-                }
-
-                try {
-                    this.log(`Connecting to Google Sheet: ${sheetId}`, 'info');
-                    this.showAlert('Connecting to Google Sheet...', 'info');
-
-                    // Show loading state
-                    const connectBtn = document.getElementById('connectSheetBtn');
-                    const originalText = connectBtn.innerHTML;
-                    connectBtn.innerHTML = '<div class="loading"></div> Connecting...';
-                    connectBtn.disabled = true;
-
-                    const response = await fetch('/api/connect-sheet', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                        },
-                        body: JSON.stringify({
-                            sheet_id: sheetId,
-                            worksheet_name: 'Records'
-                        })
-                    });
-
-                    const result = await response.json();
-
-                    if (result.success) {
-                        this.showAlert(`Successfully connected to Google Sheet with ${result.data.total_records} records`, 'success');
-                        this.log(`Connected to Google Sheet: ${result.data.total_records} records loaded`, 'success');
-
-                        // Update sheet info
-                        const sheetInfo = document.getElementById('sheetInfo');
-                        sheetInfo.innerHTML = `
-                            <strong>📊 Connected Successfully</strong><br>
-                            📈 ${result.data.total_records} records loaded<br>
-                            🕐 ${new Date(result.data.connection_timestamp).toLocaleString()}<br>
-                            🆔 Sheet ID: ${sheetId}<br>
-                            📋 Worksheet: ${result.data.sheet_info.worksheet_name}
-                        `;
-                        sheetInfo.classList.add('show');
-
-                        // Update UI state
-                        this.sheetConnected = true;
-                        this.currentSheetId = sheetId;
-                        document.getElementById('sheetsSection').classList.add('connected');
-                        document.getElementById('uploadSection').classList.remove('show');
-
-                        // Enable controls
-                        document.getElementById('startBtn').disabled = false;
-                        document.getElementById('resetBtn').disabled = false;
-                        document.getElementById('disconnectBtn').disabled = false;
-
-                        // Update connect button
-                        connectBtn.innerHTML = '✅ Connected';
-                        connectBtn.disabled = false;
-
-                        // Refresh status
-                        await this.fetchStatus();
-
-                    } else {
-                        throw new Error(result.error || 'Connection failed');
-                    }
-
-                } catch (error) {
-                    this.showAlert(`Failed to connect: ${error.message}`, 'error');
-                    this.log(`Failed to connect to Google Sheet: ${error.message}`, 'error');
-
-                    // Reset button state
-                    const connectBtn = document.getElementById('connectSheetBtn');
-                    connectBtn.innerHTML = originalText;
-                    connectBtn.disabled = false;
-                }
-            }
-
-            async disconnectSheet() {
-                try {
-                    this.log('Disconnecting from Google Sheet...', 'info');
-
-                    const response = await fetch('/api/disconnect-sheet', {
-                        method: 'POST'
-                    });
-
-                    const result = await response.json();
-
-                    if (result.success) {
-                        this.showAlert('Disconnected from Google Sheet', 'info');
-                        this.log('Disconnected from Google Sheet', 'info');
-
-                        // Reset UI state
-                        this.sheetConnected = false;
-                        this.currentSheetId = null;
-                        document.getElementById('sheetsSection').classList.remove('connected');
-                        document.getElementById('sheetInfo').classList.remove('show');
-                        document.getElementById('sheetIdInput').value = '';
-                        document.getElementById('uploadSection').classList.add('show');
-
-                        // Reset connect button
-                        const connectBtn = document.getElementById('connectSheetBtn');
-                        connectBtn.innerHTML = '📊 Connect';
-                        connectBtn.disabled = false;
-
-                        // Disable controls
-                        this.updateControlButtons('idle');
-                        document.getElementById('startBtn').disabled = true;
-                        document.getElementById('disconnectBtn').disabled = true;
-
-                        // Clear status
-                        await this.fetchStatus();
-
-                    } else {
-                        throw new Error(result.error);
-                    }
-
-                } catch (error) {
-                    this.showAlert(`Failed to disconnect: ${error.message}`, 'error');
-                    this.log(`Failed to disconnect: ${error.message}`, 'error');
-                }
-            }
-
-            async handleFileUpload(event) {
-                const file = event.target.files[0];
-                if (file) {
-                    this.showAlert('Excel upload is deprecated. Please use Google Sheets integration instead.', 'warning');
-                    this.log('Legacy Excel upload attempted - redirecting to Google Sheets', 'warning');
-                }
-            }
-
-            async startQueue() {
-                try {
-                    this.log('Starting call queue...', 'info');
-
-                    const response = await fetch('/api/queue/start', {
-                        method: 'POST'
-                    });
-
-                    const result = await response.json();
-
-                    if (result.success) {
-                        this.showAlert('Call queue started successfully', 'success');
-                        this.log('Call queue started', 'success');
-                        this.updateControlButtons('running');
-                    } else {
-                        throw new Error(result.error);
-                    }
-
-                } catch (error) {
-                    this.showAlert(`Failed to start queue: ${error.message}`, 'error');
-                    this.log(`Failed to start queue: ${error.message}`, 'error');
-                }
-            }
-
-            async pauseQueue() {
-                try {
-                    const response = await fetch('/api/queue/pause', {
-                        method: 'POST'
-                    });
-
-                    const result = await response.json();
-
-                    if (result.success) {
-                        this.showAlert('Call queue paused', 'warning');
-                        this.log('Call queue paused', 'warning');
-                        this.updateControlButtons('paused');
-                    } else {
-                        throw new Error(result.error);
-                    }
-
-                } catch (error) {
-                    this.showAlert(`Failed to pause queue: ${error.message}`, 'error');
-                    this.log(`Failed to pause queue: ${error.message}`, 'error');
-                }
-            }
-
-            async stopQueue() {
-                try {
-                    const response = await fetch('/api/queue/stop', {
-                        method: 'POST'
-                    });
-
-                    const result = await response.json();
-
-                    if (result.success) {
-                        this.showAlert('Call queue stopped', 'info');
-                        this.log('Call queue stopped', 'info');
-                        this.updateControlButtons('stopped');
-                    } else {
-                        throw new Error(result.error);
-                    }
-
-                } catch (error) {
-                    this.showAlert(`Failed to stop queue: ${error.message}`, 'error');
-                    this.log(`Failed to stop queue: ${error.message}`, 'error');
-                }
-            }
-
-            async skipCurrent() {
-                try {
-                    const response = await fetch('/api/queue/skip-current', {
-                        method: 'POST'
-                    });
-
-                    const result = await response.json();
-
-                    if (result.success) {
-                        this.showAlert('Current call skipped', 'info');
-                        this.log(`Skipped call to ${result.data.skipped_record.name}`, 'info');
-                    } else {
-                        throw new Error(result.error);
-                    }
-
-                } catch (error) {
-                    this.showAlert(`Failed to skip call: ${error.message}`, 'error');
-                    this.log(`Failed to skip call: ${error.message}`, 'error');
-                }
-            }
-
-            async resetQueue() {
-                try {
-                    const response = await fetch('/api/queue/reset', {
-                        method: 'POST'
-                    });
-
-                    const result = await response.json();
-
-                    if (result.success) {
-                        this.showAlert('Queue reset successfully', 'info');
-                        this.log('Queue reset to beginning', 'info');
-                        this.updateControlButtons('idle');
-                        await this.fetchStatus();
-                    } else {
-                        throw new Error(result.error);
-                    }
-
-                } catch (error) {
-                    this.showAlert(`Failed to reset queue: ${error.message}`, 'error');
-                    this.log(`Failed to reset queue: ${error.message}`, 'error');
-                }
-            }
-
-            async fetchStatus() {
-                try {
-                    const response = await fetch('/api/queue/status');
-                    const status = await response.json();
-
-                    this.updateStatusDisplay(status);
-                    this.updateControlButtons(status.status);
-
-                } catch (error) {
-                    console.error('Failed to fetch status:', error);
-                }
-            }
-
-            updateStatusDisplay(status) {
-
-                // Update queue status badge
-                const statusBadge = document.getElementById('queueStatus');
-                statusBadge.textContent = status.status.toUpperCase();
-                statusBadge.className = `status-badge status-${status.status}`;
-
-                // Update progress bar
-                const progressFill = document.getElementById('progressFill');
-                const progressText = document.getElementById('progressText');
-                const percentage = status.progress_percentage || 0;
-
-                progressFill.style.width = `${percentage}%`;
-                progressText.textContent = `${Math.round(percentage)}%`;
-
-                // Update statistics
-                if (status.stats) {
-                    document.getElementById('appointmentsCount').textContent = status.stats.successful_appointments || 0;
-                    document.getElementById('reschedulesCount').textContent = status.stats.reschedule_requests || 0;
-                    document.getElementById('incompleteCount').textContent = status.stats.incomplete_calls || 0;
-                    document.getElementById('failedCount').textContent = status.stats.failed_calls || 0;
-                }
-
-                // Update current call info
-                if (status.current_record) {
-                    document.getElementById('currentPatientName').textContent = status.current_record.name || '-';
-                    document.getElementById('currentPatientPhone').textContent = status.current_record.phone || '-';
-                    document.getElementById('currentPatientInfo').textContent =
-                        `${status.current_record.age || '-'} / ${status.current_record.gender || '-'}`;
-                    document.getElementById('currentPatientAddress').textContent = status.current_record.address || '-';
-                } else {
-                    document.getElementById('currentPatientName').textContent = '-';
-                    document.getElementById('currentPatientPhone').textContent = '-';
-                    document.getElementById('currentPatientInfo').textContent = '-';
-                    document.getElementById('currentPatientAddress').textContent = '-';
-                }
-
-                // Update sheet connection status
-                if (status.connected_sheet_id && !this.sheetConnected) {
-                    this.sheetConnected = true;
-                    this.currentSheetId = status.connected_sheet_id;
-                    document.getElementById('sheetsSection').classList.add('connected');
-                    document.getElementById('sheetIdInput').value = status.connected_sheet_id;
-                    document.getElementById('connectSheetBtn').innerHTML = '✅ Connected';
-                    document.getElementById('disconnectBtn').disabled = false;
-
-                    if (status.sheet_info) {
-                        const sheetInfo = document.getElementById('sheetInfo');
-                        sheetInfo.innerHTML = `
-                            <strong>📊 ${status.sheet_info.title || 'Connected Sheet'}</strong><br>
-                            📈 ${status.total_records} records loaded<br>
-                            🕐 ${status.connection_timestamp ? new Date(status.connection_timestamp).toLocaleString() : 'Connected'}<br>
-                            🆔 Sheet ID: ${status.connected_sheet_id}
-                        `;
-                        sheetInfo.classList.add('show');
-                    }
-                }
-
-                this.currentStatus = status.status;
-            }
-
-            updateControlButtons(status) {
-                const startBtn = document.getElementById('startBtn');
-                const pauseBtn = document.getElementById('pauseBtn');
-                const stopBtn = document.getElementById('stopBtn');
-                const skipBtn = document.getElementById('skipBtn');
-                const resetBtn = document.getElementById('resetBtn');
-
-                // Reset all buttons
-                [startBtn, pauseBtn, stopBtn, skipBtn].forEach(btn => {
-                    btn.disabled = true;
-                    btn.classList.remove('pulse');
-                });
-
-                // Only enable controls if sheet is connected
-                if (!this.sheetConnected) {
-                    resetBtn.disabled = true;
-                    return;
-                }
-
-                switch (status) {
-                    case 'idle':
-                        startBtn.disabled = false;
-                        resetBtn.disabled = false;
-                        break;
-                    case 'running':
-                        pauseBtn.disabled = false;
-                        stopBtn.disabled = false;
-                        skipBtn.disabled = false;
-                        pauseBtn.classList.add('pulse');
-                        break;
-                    case 'paused':
-                        startBtn.disabled = false;
-                        stopBtn.disabled = false;
-                        startBtn.innerHTML = '▶️ Resume';
-                        startBtn.onclick = () => this.resumeQueue();
-                        break;
-                    case 'stopped':
-                    case 'completed':
-                        resetBtn.disabled = false;
-                        startBtn.innerHTML = '▶️ Start';
-                        startBtn.onclick = () => this.startQueue();
-                        break;
-                }
-            }
-
-            async resumeQueue() {
-                try {
-                    const response = await fetch('/api/queue/resume', {
-                        method: 'POST'
-                    });
-
-                    const result = await response.json();
-
-                    if (result.success) {
-                        this.showAlert('Call queue resumed', 'success');
-                        this.log('Call queue resumed', 'success');
-                        this.updateControlButtons('running');
-                    } else {
-                        throw new Error(result.error);
-                    }
-
-                } catch (error) {
-                    this.showAlert(`Failed to resume queue: ${error.message}`, 'error');
-                    this.log(`Failed to resume queue: ${error.message}`, 'error');
-                }
-            }
-
-            connectWebSocket() {
-                try {
-                    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-                    const wsUrl = `${protocol}//${window.location.host}/ws/queue-status`;
-
-                    this.ws = new WebSocket(wsUrl);
-
-                    this.ws.onopen = () => {
-                        this.log('WebSocket connected for real-time updates', 'info');
-                    };
-
-                    this.ws.onmessage = (event) => {
-                        const status = JSON.parse(event.data);
-                        this.updateStatusDisplay(status);
-                    };
-
-                    this.ws.onclose = () => {
-                        this.log('WebSocket disconnected', 'warning');
-                        setTimeout(() => this.connectWebSocket(), 5000);
-                    };
-
-                } catch (error) {
-                    console.error('WebSocket connection failed:', error);
-                }
-            }
-
-            startStatusUpdates() {
-                this.statusUpdateInterval = setInterval(() => {
-                    if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-                        this.fetchStatus();
-                    }
-                }, 5000);
-            }
-
-            showAlert(message, type = 'info') {
-                const alertsSection = document.getElementById('alertsSection');
-
-                const alert = document.createElement('div');
-                alert.className = `alert alert-${type} show`;
-                alert.innerHTML = `
-                    <span>${message}</span>
-                    <button onclick="this.parentElement.remove()" style="float: right; background: none; border: none; font-size: 1.2em; cursor: pointer;">&times;</button>
-                `;
-
-                alertsSection.appendChild(alert);
-
-                setTimeout(() => {
-                    if (alert.parentElement) {
-                        alert.remove();
-                    }
-                }, 5000);
-            }
-
-            log(message, level = 'info') {
-                const logsSection = document.getElementById('logsSection');
-                const timestamp = new Date().toLocaleString();
-
-                const logEntry = document.createElement('div');
-                logEntry.className = 'log-entry';
-                logEntry.innerHTML = `
-                    <span class="log-timestamp">[${timestamp}]</span>
-                    <span class="log-level-${level}">[${level.toUpperCase()}]</span>
-                    ${message}
-                `;
-
-                logsSection.appendChild(logEntry);
-                logsSection.scrollTop = logsSection.scrollHeight;
-
-                while (logsSection.children.length > 50) {
-                    logsSection.removeChild(logsSection.firstChild);
-                }
-            }
-
-            destroy() {
-                if (this.statusUpdateInterval) {
-                    clearInterval(this.statusUpdateInterval);
-                }
-                if (this.ws) {
-                    this.ws.close();
-                }
-            }
-        }
-
-        // Global functions for button onclick handlers
-        let callCenterConsole = null;
-
-        function connectToSheet() {
-            if (callCenterConsole) {
-                callCenterConsole.connectToSheet();
-            }
-        }
-
-        function disconnectSheet() {
-            if (callCenterConsole) {
-                callCenterConsole.disconnectSheet();
-            }
-        }
-
-        function startQueue() {
-            if (callCenterConsole) {
-                callCenterConsole.startQueue();
-            }
-        }
-
-        function pauseQueue() {
-            if (callCenterConsole) {
-                callCenterConsole.pauseQueue();
-            }
-        }
-
-        function stopQueue() {
-            if (callCenterConsole) {
-                callCenterConsole.stopQueue();
-            }
-        }
-
-        function skipCurrent() {
-            if (callCenterConsole) {
-                callCenterConsole.skipCurrent();
-            }
-        }
-
-        function resetQueue() {
-            if (callCenterConsole) {
-                callCenterConsole.resetQueue();
-            }
-        }
-
-        // Initialize when page loads
-        document.addEventListener('DOMContentLoaded', () => {
-            callCenterConsole = new CallCenterConsole();
+        let queueStatusWS = null;
+        let statusUpdateInterval = null;
+
+        // Initialize the console
+        document.addEventListener('DOMContentLoaded', function() {
+            checkSystemStatus();
+            setupStatusUpdates();
+            connectQueueStatusWebSocket();
         });
 
+        // Check overall system status
+        async function checkSystemStatus() {
+            try {
+                const response = await fetch('/status');
+                const data = await response.json();
+
+                document.getElementById('serverStatus').textContent = 'Running';
+                document.getElementById('serverStatus').className = 'status-value status-connected';
+
+                // Google Sheets status
+                if (data.google_sheets_status?.connected) {
+                    document.getElementById('sheetsService').textContent = 'Connected';
+                    document.getElementById('sheetsService').className = 'status-value status-connected';
+                } else {
+                    document.getElementById('sheetsService').textContent = 'Disconnected';
+                    document.getElementById('sheetsService').className = 'status-value status-disconnected';
+                }
+
+                // Drive API status
+                if (data.drive_api_status?.service_initialized) {
+                    document.getElementById('driveAPI').textContent = `Active (${data.drive_api_status.active_channels} channels)`;
+                    document.getElementById('driveAPI').className = 'status-value status-connected';
+                } else {
+                    document.getElementById('driveAPI').textContent = 'Inactive';
+                    document.getElementById('driveAPI').className = 'status-value status-disconnected';
+                }
+
+                document.getElementById('dbStatus').textContent = 'Connected';
+                document.getElementById('dbStatus').className = 'status-value status-connected';
+
+            } catch (error) {
+                console.error('Error checking system status:', error);
+                document.getElementById('serverStatus').textContent = 'Error';
+                document.getElementById('serverStatus').className = 'status-value status-disconnected';
+            }
+        }
+
+        // Setup periodic status updates
+        function setupStatusUpdates() {
+            statusUpdateInterval = setInterval(async () => {
+                await updateQueueStatus();
+                await checkSystemStatus();
+            }, 3000); // Update every 3 seconds
+        }
+
+        // Connect to queue status WebSocket
+        function connectQueueStatusWebSocket() {
+            if (queueStatusWS) {
+                queueStatusWS.close();
+            }
+
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${protocol}//${window.location.host}/ws/queue-status`;
+
+            queueStatusWS = new WebSocket(wsUrl);
+
+            queueStatusWS.onmessage = function(event) {
+                const data = JSON.parse(event.data);
+                updateQueueDisplay(data);
+            };
+
+            queueStatusWS.onclose = function() {
+                console.log('Queue status WebSocket disconnected, reconnecting...');
+                setTimeout(connectQueueStatusWebSocket, 3000);
+            };
+        }
+
+        // Update queue status display
+        async function updateQueueStatus() {
+            try {
+                const response = await fetch('/api/queue/status');
+                const data = await response.json();
+                updateQueueDisplay(data);
+            } catch (error) {
+                console.error('Error updating queue status:', error);
+            }
+        }
+
+        // Update queue display with real-time data
+        function updateQueueDisplay(data) {
+            // Queue status
+            const statusElement = document.getElementById('queueStatusValue');
+            statusElement.textContent = data.status?.charAt(0).toUpperCase() + data.status?.slice(1) || 'Unknown';
+            statusElement.className = `status-value status-${data.status}`;
+
+            // Position and remaining
+            document.getElementById('currentPosition').textContent = `${data.current_index || 0} / ${data.total_records || 0}`;
+            document.getElementById('remainingCalls').textContent = data.remaining_calls || 0;
+            document.getElementById('callInProgress').textContent = data.call_in_progress ? 'Yes' : 'No';
+
+            // Update button states
+            updateButtonStates(data.status);
+
+            // Show dynamic records info when queue is running
+            const dynamicInfo = document.getElementById('dynamicRecordsInfo');
+            if (data.status === 'running' && data.queue_can_grow) {
+                dynamicInfo.classList.remove('hidden');
+            } else {
+                dynamicInfo.classList.add('hidden');
+            }
+
+            // Current record
+            if (data.current_record) {
+                showCurrentRecord(data.current_record);
+            } else {
+                hideCurrentRecord();
+            }
+
+            // Statistics
+            if (data.stats) {
+                document.getElementById('totalCalls').textContent = data.stats.total_calls || 0;
+                document.getElementById('appointments').textContent = data.stats.successful_appointments || 0;
+                document.getElementById('reschedules').textContent = data.stats.reschedule_requests || 0;
+                document.getElementById('incomplete').textContent = data.stats.incomplete_calls || 0;
+                document.getElementById('failed').textContent = data.stats.failed_calls || 0;
+            }
+
+            // Real-time monitoring status
+            updateMonitoringStatus(data.monitoring_enabled);
+        }
+
+        // Update button states based on queue status
+        function updateButtonStates(status) {
+            const startBtn = document.getElementById('startBtn');
+            const pauseBtn = document.getElementById('pauseBtn');
+            const resumeBtn = document.getElementById('resumeBtn');
+            const stopBtn = document.getElementById('stopBtn');
+            const skipBtn = document.getElementById('skipBtn');
+            const resetBtn = document.getElementById('resetBtn');
+
+            // Reset all buttons
+            [startBtn, pauseBtn, resumeBtn, stopBtn, skipBtn, resetBtn].forEach(btn => {
+                btn.disabled = false;
+            });
+
+            switch (status) {
+                case 'idle':
+                    pauseBtn.disabled = true;
+                    resumeBtn.disabled = true;
+                    stopBtn.disabled = true;
+                    skipBtn.disabled = true;
+                    break;
+                case 'running':
+                    startBtn.disabled = true;
+                    resumeBtn.disabled = true;
+                    resetBtn.disabled = true;
+                    break;
+                case 'paused':
+                    startBtn.disabled = true;
+                    pauseBtn.disabled = true;
+                    resetBtn.disabled = true;
+                    break;
+                case 'stopped':
+                    startBtn.disabled = true;
+                    pauseBtn.disabled = true;
+                    resumeBtn.disabled = true;
+                    stopBtn.disabled = true;
+                    skipBtn.disabled = true;
+                    break;
+                case 'completed':
+                    startBtn.disabled = true;
+                    pauseBtn.disabled = true;
+                    resumeBtn.disabled = true;
+                    stopBtn.disabled = true;
+                    skipBtn.disabled = true;
+                    break;
+            }
+        }
+
+        // Show current record details
+        function showCurrentRecord(record) {
+            document.getElementById('recordName').textContent = record.name || '-';
+            document.getElementById('recordPhone').textContent = record.phone || '-';
+            document.getElementById('recordAge').textContent = record.age || '-';
+            document.getElementById('recordGender').textContent = record.gender || '-';
+            document.getElementById('recordRow').textContent = record.row_number || '-';
+            document.getElementById('recordStatus').textContent = record.status || '-';
+            document.getElementById('currentRecord').classList.remove('hidden');
+        }
+
+        // Hide current record display
+        function hideCurrentRecord() {
+            document.getElementById('currentRecord').classList.add('hidden');
+        }
+
+        // Update monitoring status indicator
+        function updateMonitoringStatus(isActive) {
+            const indicator = document.getElementById('realtimeIndicator');
+            if (isActive) {
+                indicator.className = 'realtime-indicator active';
+                indicator.innerHTML = '<span>Active - Real-time updates enabled</span>';
+            } else {
+                indicator.className = 'realtime-indicator inactive';
+                indicator.innerHTML = '<span>Inactive - No real-time monitoring</span>';
+            }
+        }
+
+        // Connect to Google Sheet
+        async function connectToSheet() {
+            const sheetId = document.getElementById('sheetId').value.trim();
+            const worksheetName = document.getElementById('worksheetName').value.trim();
+
+            if (!sheetId) {
+                alert('Please enter a Google Sheet ID');
+                return;
+            }
+
+            const loader = document.getElementById('connectLoader');
+            loader.classList.remove('hidden');
+
+            try {
+                const response = await fetch('/api/connect-sheet', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        sheet_id: sheetId,
+                        worksheet_name: worksheetName
+                    })
+                });
+
+                const data = await response.json();
+
+                if (data.success) {
+                    showSheetStatus(data.data);
+                    showAlert('Successfully connected to Google Sheet with real-time monitoring!', 'success');
+
+                    // Show connection alert
+                    const alert = document.getElementById('connectionAlert');
+                    alert.classList.remove('hidden');
+                } else {
+                    showAlert(`Failed to connect: ${data.detail || 'Unknown error'}`, 'error');
+                }
+            } catch (error) {
+                console.error('Error connecting to sheet:', error);
+                showAlert('Error connecting to Google Sheet', 'error');
+            } finally {
+                loader.classList.add('hidden');
+            }
+        }
+
+        // Show sheet status
+        function showSheetStatus(data) {
+            document.getElementById('sheetStatusValue').textContent = 'Connected';
+            document.getElementById('sheetStatusValue').className = 'status-value status-connected';
+            document.getElementById('totalRecords').textContent = data.total_records || 0;
+            document.getElementById('validRecords').textContent = data.valid_records || 0;
+            document.getElementById('sheetStatus').classList.remove('hidden');
+
+            // Update monitoring status
+            updateMonitoringStatus(data.sheet_info?.monitoring_enabled || false);
+        }
+
+        // Disconnect from sheet
+        async function disconnectSheet() {
+            try {
+                const response = await fetch('/api/disconnect-sheet', {
+                    method: 'POST'
+                });
+
+                if (response.ok) {
+                    document.getElementById('sheetStatus').classList.add('hidden');
+                    document.getElementById('connectionAlert').classList.add('hidden');
+                    updateMonitoringStatus(false);
+                    showAlert('Disconnected from Google Sheet', 'info');
+                }
+            } catch (error) {
+                console.error('Error disconnecting:', error);
+            }
+        }
+
+        // Queue management functions
+        async function startQueue() {
+            await queueAction('/api/queue/start', 'Queue started successfully!');
+        }
+
+        async function pauseQueue() {
+            await queueAction('/api/queue/pause', 'Queue paused');
+        }
+
+        async function resumeQueue() {
+            await queueAction('/api/queue/resume', 'Queue resumed');
+        }
+
+        async function stopQueue() {
+            await queueAction('/api/queue/stop', 'Queue stopped');
+        }
+
+        async function resetQueue() {
+            if (confirm('Are you sure you want to reset the queue? This will reset all call statuses.')) {
+                await queueAction('/api/queue/reset', 'Queue reset successfully');
+            }
+        }
+
+        async function skipCurrent() {
+            if (confirm('Are you sure you want to skip the current call?')) {
+                await queueAction('/api/queue/skip-current', 'Current call skipped');
+            }
+        }
+
+        // Generic queue action handler
+        async function queueAction(endpoint, successMessage) {
+            try {
+                const response = await fetch(endpoint, { method: 'POST' });
+                const data = await response.json();
+
+                if (data.success) {
+                    showAlert(successMessage, 'success');
+                } else {
+                    showAlert(`Error: ${data.detail || 'Unknown error'}`, 'error');
+                }
+            } catch (error) {
+                console.error('Queue action error:', error);
+                showAlert('Error performing queue action', 'error');
+            }
+        }
+
+        // Show alert message
+        function showAlert(message, type) {
+            // Remove existing alerts
+            const existingAlerts = document.querySelectorAll('.alert:not(#connectionAlert)');
+            existingAlerts.forEach(alert => alert.remove());
+
+            // Create new alert
+            const alert = document.createElement('div');
+            alert.className = `alert ${type}`;
+            alert.textContent = message;
+
+            // Insert after header
+            const header = document.querySelector('.header');
+            header.parentNode.insertBefore(alert, header.nextSibling);
+
+            // Auto-remove after 5 seconds
+            setTimeout(() => {
+                alert.remove();
+            }, 5000);
+        }
+
         // Cleanup on page unload
-        window.addEventListener('beforeunload', () => {
-            if (callCenterConsole) {
-                callCenterConsole.destroy();
+        window.addEventListener('beforeunload', function() {
+            if (queueStatusWS) {
+                queueStatusWS.close();
+            }
+            if (statusUpdateInterval) {
+                clearInterval(statusUpdateInterval);
             }
         });
     </script>
 </body>
-</html>
+</html>s
