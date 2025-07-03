@@ -65,6 +65,13 @@ conversation_transcript = []
 current_call_session = None
 # Global variable to store single call patient info
 single_call_patient_info = None
+# Global variable to track reschedule state
+reschedule_state = {
+    "reschedule_initiated": False,
+    "waiting_for_callback_details": False,
+    "callback_details_received": False,
+    "reschedule_confirmed": False
+}
 
 plivo_client = plivo.RestClient(settings.PLIVO_AUTH_ID, settings.PLIVO_AUTH_TOKEN)
 
@@ -135,9 +142,9 @@ class CallHangupManager:
 # Global instance of CallHangupManager
 hangup_manager = CallHangupManager()
 
-
+# Updated extract_appointment_details function
 def extract_appointment_details():
-    """Extract appointment details from conversation transcript"""
+    """Extract appointment details from conversation transcript with enhanced date parsing"""
     full_conversation = " ".join(conversation_transcript)
 
     extracted_info = {
@@ -149,63 +156,161 @@ def extract_appointment_details():
         "appointment_confirmed": False
     }
 
-    # Date patterns
+    # Enhanced date patterns to capture specific dates
     date_patterns = [
-        r'(\d{1,2}[-/]\d{1,2}[-/]\d{4})',
-        r'(\d{4}[-/]\d{1,2}[-/]\d{1,2})',
-        r'(\d{1,2}\s*\w+\s*\d{4})',
-        r'(Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday)',
-        r'(सोमवार|मंगलवार|बुधवार|गुरुवार|शुक्रवार|शनिवार|रविवार)',
-        r'(आज|कल|परसों)',
-        r'(tomorrow|today|day after tomorrow)',
+        # Standard date formats
+        r'(\d{1,2}[-/]\d{1,2}[-/]\d{4})',  # DD-MM-YYYY or DD/MM/YYYY
+        r'(\d{4}[-/]\d{1,2}[-/]\d{1,2})',  # YYYY-MM-DD or YYYY/MM/DD
+        r'(\d{1,2}[-/]\d{1,2}[-/]\d{2})',  # DD-MM-YY or DD/MM/YY
+        
+        # Date with month names (English)
+        r'(\d{1,2}\s+(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{4})',
+        r'(\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{4})',
+        
+        # Date with month names (Hindi)
+        r'(\d{1,2}\s+(?:जनवरी|फरवरी|मार्च|अप्रैल|मई|जून|जुलाई|अगस्त|सितंबर|अक्टूबर|नवंबर|दिसंबर)\s+\d{4})',
+        
+        # Conversational date formats
+        r'(\d{1,2}\s+(?:तारीख|date))',  # "15 तारीख" or "15 date"
+        r'(आज\s+से\s+\d+\s+(?:दिन|day))',  # "आज से 3 दिन" or "आज से 3 day"
+        r'(\d+\s+(?:दिसंबर|December|दिसम्बर))',  # "15 दिसंबर" or "15 December"
+        r'(\d+\s+(?:जनवरी|January))',  # "20 जनवरी" or "20 January"
+        
+        # Relative dates
+        r'(आज|कल|परसों)',  # today, tomorrow, day after tomorrow
+        r'(tomorrow|today|day\s+after\s+tomorrow)',
+        r'(next\s+(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday))',
+        r'(अगले\s+(?:सोमवार|मंगलवार|बुधवार|गुरुवार|शुक्रवार|शनिवार|रविवार))',
+        
+        # Week references with dates
+        r'(इस\s+हफ्ते\s+\d{1,2})',  # "इस हफ्ते 15"
+        r'(अगले\s+हफ्ते\s+\d{1,2})',  # "अगले हफ्ते 20"
     ]
 
-    # Time patterns
+    # Enhanced time patterns
     time_patterns = [
+        # Specific times
+        r'(\d{1,2}:\d{2}\s*(?:AM|PM|am|pm))',  # 10:30 AM
+        r'(\d{1,2}:\d{2})',  # 10:30 (24-hour format)
+        r'(\d{1,2}\s*(?:AM|PM|am|pm))',  # 10 AM
+        r'(\d{1,2}\s*बजे)',  # 10 बजे
+        r'(\d{1,2}\s*(?:बजकर)\s*\d{1,2}\s*(?:मिनट))',  # 10 बजकर 30 मिनट
+        
+        # Time periods
         r'(morning|सुबह)',
         r'(afternoon|दोपहर)',
         r'(evening|शाम)',
-        r'(\d{1,2}:\d{2})',
-        r'(\d{1,2}\s*बजे)',
-        r'(\d{1,2}\s*AM|\d{1,2}\s*PM)',
+        r'(night|रात)',
+        
+        # Specific time slots mentioned by AI
+        r'(10\s*(?:बजे|AM|am)\s*से\s*12\s*(?:बजे|PM|pm))',  # 10 AM to 12 PM
+        r'(2\s*(?:बजे|PM|pm)\s*से\s*4\s*(?:बजे|PM|pm))',   # 2 PM to 4 PM
+        r'(5\s*(?:बजे|PM|pm)\s*से\s*7\s*(?:बजे|PM|pm))',   # 5 PM to 7 PM
     ]
 
-    # Extract information
+    # Extract date information
+    raw_date = None
     for pattern in date_patterns:
         matches = re.findall(pattern, full_conversation, re.IGNORECASE)
         if matches:
-            extracted_info["appointment_date"] = matches[0]
+            raw_date = matches[0]
             break
 
+    # Normalize the extracted date using our helper function
+    if raw_date:
+        normalized_date = normalize_date(raw_date)
+        extracted_info["appointment_date"] = normalized_date
+        print(f"📅 Raw date: '{raw_date}' → Normalized: '{normalized_date}'")
+
+    # Extract time information
     for pattern in time_patterns:
         matches = re.findall(pattern, full_conversation, re.IGNORECASE)
         if matches:
             extracted_info["appointment_time"] = matches[0]
             break
 
-    # Determine time slot
+    # Determine time slot based on conversation
     conversation_lower = full_conversation.lower()
-    if 'morning' in conversation_lower or 'सुबह' in conversation_lower:
+    if any(keyword in conversation_lower for keyword in ['morning', 'सुबह', '10 am', '10 बजे', '11 am', '11 बजे']):
         extracted_info["time_slot"] = "morning"
-    elif 'afternoon' in conversation_lower or 'दोपहर' in conversation_lower:
+    elif any(keyword in conversation_lower for keyword in ['afternoon', 'दोपहर', '2 pm', '2 बजे', '3 pm', '3 बजे', '4 pm', '4 बजे']):
         extracted_info["time_slot"] = "afternoon"
-    elif 'evening' in conversation_lower or 'शाम' in conversation_lower:
+    elif any(keyword in conversation_lower for keyword in ['evening', 'शाम', '5 pm', '5 बजे', '6 pm', '6 बजे', '7 pm', '7 बजे']):
         extracted_info["time_slot"] = "evening"
 
-    # Check for confirmation
+    # Enhanced confirmation keywords
     confirmation_keywords = [
         "slot book कर लिया",
         "बुक कर दिया है",
         "अपॉइंटमेंट.*बुक.*है",
         "आपका अपॉइंटमेंट.*फिक्स",
         "तो मैंने.*बुक कर दिया",
-        "शानदार.*बुक कर दिया"
+        "शानदार.*बुक कर दिया",
+        "slot.*reserve.*कर.*रही",
+        "calendar.*में.*slot.*book",
+        "आपके.*लिए.*slot.*book",
+        "appointment.*confirm",
+        "booking.*confirm"
     ]
+    
     extracted_info["appointment_confirmed"] = any(
         re.search(keyword, full_conversation, re.IGNORECASE) for keyword in confirmation_keywords
     )
 
     return extracted_info
+
+
+# Additional helper function to parse and normalize dates
+def normalize_date(date_string):
+    """Convert various date formats to a standard format"""
+    if not date_string:
+        return None
+    
+    from datetime import datetime, timedelta
+    import calendar
+    
+    date_lower = date_string.lower().strip()
+    today = datetime.now()
+    
+    # Handle relative dates
+    if date_lower in ['आज', 'today']:
+        return today.strftime('%d-%m-%Y')
+    elif date_lower in ['कल', 'tomorrow']:
+        return (today + timedelta(days=1)).strftime('%d-%m-%Y')
+    elif date_lower in ['परसों', 'day after tomorrow']:
+        return (today + timedelta(days=2)).strftime('%d-%m-%Y')
+    
+    # Handle month names conversion
+    month_mapping = {
+        'january': '01', 'jan': '01', 'जनवरी': '01',
+        'february': '02', 'feb': '02', 'फरवरी': '02',
+        'march': '03', 'mar': '03', 'मार्च': '03',
+        'april': '04', 'apr': '04', 'अप्रैल': '04',
+        'may': '05', 'मई': '05',
+        'june': '06', 'jun': '06', 'जून': '06',
+        'july': '07', 'jul': '07', 'जुलाई': '07',
+        'august': '08', 'aug': '08', 'अगस्त': '08',
+        'september': '09', 'sep': '09', 'सितंबर': '09',
+        'october': '10', 'oct': '10', 'अक्टूबर': '10',
+        'november': '11', 'nov': '11', 'नवंबर': '11',
+        'december': '12', 'dec': '12', 'दिसंबर': '12', 'दिसम्बर': '12'
+    }
+    
+    # Try to parse date with month names
+    for month_name, month_num in month_mapping.items():
+        if month_name in date_lower:
+            # Extract day and year if present
+            import re
+            day_match = re.search(r'(\d{1,2})', date_string)
+            year_match = re.search(r'(\d{4})', date_string)
+            
+            if day_match:
+                day = day_match.group(1).zfill(2)
+                year = year_match.group(1) if year_match else str(today.year)
+                return f"{day}-{month_num}-{year}"
+    
+    # Return original if no parsing successful
+    return date_string
 
 
 def detect_reschedule_request():
@@ -231,7 +336,7 @@ def detect_reschedule_request():
 
 
 def extract_reschedule_details():
-    """Extract reschedule callback details from conversation"""
+    """Extract reschedule callback details from conversation with enhanced parsing"""
     full_conversation = " ".join(conversation_transcript)
 
     callback_info = {
@@ -239,23 +344,54 @@ def extract_reschedule_details():
         "callback_time": None,
         "callback_day": None,
         "callback_period": None,
-        "raw_conversation": full_conversation
+        "raw_conversation": full_conversation,
+        "normalized_callback_date": None,
+        "reschedule_confirmed": False
     }
 
-    # Date patterns
+    # Enhanced date patterns for reschedule
     date_patterns = [
-        (r'(\d{1,2}[-/]\d{1,2}[-/]\d{4})', 'dd-mm-yyyy'),
-        (r'(\d{4}[-/]\d{1,2}[-/]\d{1,2})', 'yyyy-mm-dd'),
+        # Standard date formats
+        r'(\d{1,2}[-/]\d{1,2}[-/]\d{4})',  # DD-MM-YYYY or DD/MM/YYYY
+        r'(\d{4}[-/]\d{1,2}[-/]\d{1,2})',  # YYYY-MM-DD
+        r'(\d{1,2}[-/]\d{1,2}[-/]\d{2})',  # DD-MM-YY
+        
+        # Date with month names
+        r'(\d{1,2}\s+(?:January|February|March|April|May|June|July|August|September|October|November|December))',
+        r'(\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec))',
+        r'(\d{1,2}\s+(?:जनवरी|फरवरी|मार्च|अप्रैल|मई|जून|जुलाई|अगस्त|सितंबर|अक्टूबर|नवंबर|दिसंबर))',
+        
+        # Conversational date formats
+        r'(\d{1,2}\s+(?:तारीख|date))',
+        r'(\d+\s+(?:दिसंबर|December|दिसम्बर))',
+        r'(\d+\s+(?:जनवरी|January))',
+        
+        # Relative dates
+        r'(आज|कल|परसों)',
+        r'(tomorrow|today|day\s+after\s+tomorrow)',
+        r'(next\s+(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday))',
+        r'(अगले\s+(?:सोमवार|मंगलवार|बुधवार|गुरुवार|शुक्रवार|शनिवार|रविवार))',
+        r'(इस\s+हफ्ते)',
+        r'(अगले\s+हफ्ते)',
     ]
 
-    # Time patterns
+    # Enhanced time patterns for reschedule
     time_patterns = [
-        (r'(\d{1,2}:\d{2})', 'hh:mm'),
-        (r'(\d{1,2})\s*बजे', 'hindi-hour'),
-        (r'(\d{1,2})\s*(AM|PM|am|pm)', 'english-ampm'),
+        # Specific times
+        r'(\d{1,2}:\d{2}\s*(?:AM|PM|am|pm))',
+        r'(\d{1,2}:\d{2})',
+        r'(\d{1,2}\s*(?:AM|PM|am|pm))',
+        r'(\d{1,2}\s*बजे)',
+        r'(\d{1,2}\s*(?:बजकर)\s*\d{1,2}\s*(?:मिनट))',
+        
+        # Time periods
+        r'(morning|सुबह)',
+        r'(afternoon|दोपहर)',
+        r'(evening|शाम)',
+        r'(night|रात)',
     ]
 
-    # Day patterns
+    # Day patterns for reschedule
     day_patterns = [
         (r'(सोमवार|monday)', 'Monday'),
         (r'(मंगलवार|tuesday)', 'Tuesday'),
@@ -268,7 +404,35 @@ def extract_reschedule_details():
         (r'(परसों)', 'Day After Tomorrow'),
     ]
 
-    # Period patterns
+    # Extract information using patterns
+    raw_date = None
+    for pattern in date_patterns:
+        matches = re.findall(pattern, full_conversation, re.IGNORECASE)
+        if matches:
+            raw_date = matches[0]
+            callback_info["callback_date"] = raw_date
+            break
+
+    # Normalize the date if found
+    if raw_date:
+        normalized_date = normalize_date(raw_date)
+        callback_info["normalized_callback_date"] = normalized_date
+        print(f"📅 Reschedule date: '{raw_date}' → Normalized: '{normalized_date}'")
+
+    # Extract time
+    for pattern in time_patterns:
+        matches = re.findall(pattern, full_conversation, re.IGNORECASE)
+        if matches:
+            callback_info["callback_time"] = matches[0]
+            break
+
+    # Extract day
+    for pattern, normalized_day in day_patterns:
+        if re.search(pattern, full_conversation, re.IGNORECASE):
+            callback_info["callback_day"] = normalized_day
+            break
+
+    # Extract period
     period_patterns = [
         (r'(सुबह|morning)', 'Morning'),
         (r'(दोपहर|afternoon)', 'Afternoon'),
@@ -276,31 +440,112 @@ def extract_reschedule_details():
         (r'(रात|night)', 'Night'),
     ]
 
-    # Extract information using patterns
-    for pattern, _ in date_patterns:
-        matches = re.findall(pattern, full_conversation, re.IGNORECASE)
-        if matches:
-            callback_info["callback_date"] = matches[0] if isinstance(matches[0], str) else ' '.join(matches[0])
-            break
-
-    for pattern, _ in time_patterns:
-        matches = re.findall(pattern, full_conversation, re.IGNORECASE)
-        if matches:
-            callback_info["callback_time"] = matches[0] if isinstance(matches[0], str) else ' '.join(matches[0])
-            break
-
-    for pattern, normalized_day in day_patterns:
-        if re.search(pattern, full_conversation, re.IGNORECASE):
-            callback_info["callback_day"] = normalized_day
-            break
-
     for pattern, normalized_period in period_patterns:
         if re.search(pattern, full_conversation, re.IGNORECASE):
             callback_info["callback_period"] = normalized_period
             break
 
+    # Check for reschedule confirmation
+    reschedule_confirmation_keywords = [
+        "reschedule request confirm हो गया",
+        "callback schedule कर देती हूँ",
+        "tentative slot hold कर लेती हूँ",
+        "हम आपको.*call करेंगे",
+        "आपका reschedule.*confirm",
+        "callback.*schedule.*है"
+    ]
+
+    callback_info["reschedule_confirmed"] = any(
+        re.search(keyword, full_conversation, re.IGNORECASE) for keyword in reschedule_confirmation_keywords
+    )
+
     return callback_info
 
+def detect_reschedule_request():
+    """Enhanced reschedule detection"""
+    full_conversation = " ".join(conversation_transcript)
+
+    reschedule_patterns = [
+        r'बिल्कुल समझ सकती हूँ',
+        r'आप बताइए कि कब.*call करूं',
+        r'कौन सी date और time.*convenient',
+        r'बाद में.*call.*करें',
+        r'अभी.*समय.*नहीं',
+        r'व्यस्त.*हूं',
+        r'partner से पूछना है',
+        r'tentative slot hold',
+        r'reschedule.*करना.*है',
+        r'दूसरे.*time.*call'
+    ]
+
+    for pattern in reschedule_patterns:
+        if re.search(pattern, full_conversation, re.IGNORECASE):
+            return True
+
+    return False
+
+# Updated trigger detection in media stream handler
+async def handle_reschedule_triggers(transcript):
+    """Handle reschedule triggers and state management"""
+    global reschedule_state
+    
+    # Initial reschedule triggers
+    initial_reschedule_triggers = [
+        'बिल्कुल समझ सकती हूँ',
+        'partner से पूछना है',
+        'अभी समय नहीं है',
+        'व्यस्त हूं'
+    ]
+    
+    # Date/time request triggers
+    datetime_request_triggers = [
+        'आप बताइए कि कब call करूं',
+        'कौन सी date और time',
+        'convenient होगी'
+    ]
+    
+    # Confirmation triggers
+    confirmation_triggers = [
+        'callback schedule कर देती हूँ',
+        'tentative slot hold कर लेती हूँ',
+        'हम आपको.*call करेंगे',
+        'reschedule request confirm'
+    ]
+    
+    # Check for initial reschedule
+    if any(re.search(trigger, transcript, re.IGNORECASE) for trigger in initial_reschedule_triggers):
+        reschedule_state["reschedule_initiated"] = True
+        print(f"🔄 RESCHEDULE INITIATED: {transcript}")
+    
+    # Check for date/time request
+    elif any(re.search(trigger, transcript, re.IGNORECASE) for trigger in datetime_request_triggers):
+        reschedule_state["waiting_for_callback_details"] = True
+        print(f"📅 WAITING FOR CALLBACK DETAILS: {transcript}")
+    
+    # Check for confirmation
+    elif any(re.search(trigger, transcript, re.IGNORECASE) for trigger in confirmation_triggers):
+        reschedule_state["callback_details_received"] = True
+        success = await process_reschedule_outcome()
+        if success:
+            print(f"✅ RESCHEDULE CONFIRMED: {transcript}")
+            return True
+    
+    return False
+
+def should_terminate_reschedule_call(transcript):
+    """Check if reschedule call should be terminated"""
+    reschedule_termination_phrases = [
+        "धन्यवाद! आपका दिन मंगलमय हो",
+        "हम आपको.*call करेंगे.*आपका दिन शुभ हो",
+        "reschedule request confirm.*आपका दिन मंगलमय हो",
+        "callback schedule.*धन्यवाद"
+    ]
+
+    for phrase in reschedule_termination_phrases:
+        if re.search(phrase, transcript, re.IGNORECASE):
+            return True, "reschedule_completed"
+
+    return False, None
 
 def should_terminate_call(transcript):
     """Check if call should be terminated based on transcript content"""
@@ -358,23 +603,84 @@ async def append_appointment_to_sheets(appointment_details, patient_record):
         print(f"❌ Error saving appointment details: {e}")
         return False
 
-
-async def append_reschedule_to_sheets(patient_record, callback_details=None):
-    """Append reschedule request details to Google Sheets"""
+def determine_callback_priority(callback_details):
+    """Determine priority based on callback details"""
+    callback_date = callback_details.get('normalized_callback_date') or callback_details.get('callback_date', '')
+    callback_time = callback_details.get('callback_time', '')
+    callback_day = callback_details.get('callback_day', '')
+    
+    from datetime import datetime, timedelta
+    
     try:
+        # High priority for today/tomorrow callbacks
+        if any(keyword in callback_date.lower() for keyword in ['आज', 'today', 'कल', 'tomorrow']):
+            return "High"
+        
+        # High priority for specific date within next 3 days
+        if callback_date and callback_date != 'TBD':
+            try:
+                # Try to parse the date to check if it's within 3 days
+                if '-' in callback_date:
+                    parts = callback_date.split('-')
+                    if len(parts) == 3:
+                        callback_datetime = datetime(int(parts[2]), int(parts[1]), int(parts[0]))
+                        days_diff = (callback_datetime - datetime.now()).days
+                        if days_diff <= 3:
+                            return "High"
+                        elif days_diff <= 7:
+                            return "Medium"
+            except:
+                pass
+        
+        # Medium priority for specific time mentioned
+        if callback_time and callback_time != 'TBD':
+            return "Medium"
+        
+        # Medium priority for specific day mentioned
+        if callback_day and callback_day not in ['', 'TBD']:
+            return "Medium"
+        
+        # Default priority
+        return "Normal"
+        
+    except Exception as e:
+        print(f"⚠️ Error determining priority: {e}")
+        return "Normal"
+    
+async def append_reschedule_to_sheets(patient_record, callback_details=None):
+    """Enhanced reschedule function to save to reschedule_request_sheets with exact headers"""
+    try:
+        from datetime import datetime
+        
+        # Your existing Google Sheets service expects patient_record and callback_details separately
+        # NOT the prepared reschedule_data format
+        
+        # Call the EXISTING Google Sheets service method with correct parameters
         success = await google_sheets_service.append_reschedule(patient_record, callback_details)
 
         if success:
-            print(f"✅ Reschedule request saved to Google Sheets for {patient_record.get('name', 'Unknown')}")
+            print(f"✅ Reschedule request saved to reschedule_request_sheets for {patient_record.get('name', 'Unknown')}")
+            
+            # Print details for debugging
+            if callback_details:
+                callback_date = callback_details.get('normalized_callback_date') or callback_details.get('callback_date', 'TBD')
+                callback_time = callback_details.get('callback_time', 'TBD')
+                callback_day = callback_details.get('callback_day', 'TBD')
+                callback_period = callback_details.get('callback_period', 'TBD')
+                
+                print(f"   📅 Callback Date: {callback_date}")
+                print(f"   ⏰ Callback Time: {callback_time}")
+                print(f"   📆 Callback Day: {callback_day}")
+                print(f"   🕐 Callback Period: {callback_period}")
+            
             return True
         else:
-            print(f"❌ Failed to save reschedule request to Google Sheets")
+            print(f"❌ Failed to save reschedule request to reschedule_request_sheets")
             return False
 
     except Exception as e:
         print(f"❌ Error saving reschedule request: {e}")
         return False
-
 
 async def append_incomplete_call_to_sheets(patient_record, reason="call_incomplete"):
     """Append incomplete call details to Google Sheets"""
@@ -393,16 +699,89 @@ async def append_incomplete_call_to_sheets(patient_record, reason="call_incomple
         print(f"❌ Error saving incomplete call: {e}")
         return False
 
+async def process_reschedule_outcome():
+    """Process reschedule outcome and save to callback sheet with proper headers"""
+    global call_outcome_detected, current_call_uuid, reschedule_state
+
+    # Get current record
+    if single_call_patient_info:
+        patient_record = {
+            'name': single_call_patient_info['name'],
+            'phone_number': single_call_patient_info['phone_number'],
+            'address': single_call_patient_info.get('address', ''),
+            'age': single_call_patient_info.get('age', ''),
+            'gender': single_call_patient_info.get('gender', '')
+        }
+    else:
+        current_record = call_queue_manager.get_current_record()
+        if not current_record:
+            print(f"❌ No current record available for reschedule processing")
+            return
+        
+        patient_record = {
+            'name': current_record.name,
+            'phone_number': current_record.phone,
+            'address': current_record.address,
+            'age': current_record.age,
+            'gender': current_record.gender
+        }
+
+    # Extract reschedule details
+    callback_details = extract_reschedule_details()
+    
+    # Check if we have enough details for reschedule
+    has_date = callback_details.get("callback_date") or callback_details.get("callback_day")
+    has_time = callback_details.get("callback_time") or callback_details.get("callback_period")
+
+    if has_date or has_time:  # At least one piece of timing info
+        # Save reschedule request to callback sheet
+        success = await append_reschedule_to_sheets(patient_record, callback_details)
+        
+        if success:
+            print(f"📅 Reschedule request recorded in callback sheet for {patient_record.get('name', 'Unknown')}")
+            print(f"   Callback Date: {callback_details.get('normalized_callback_date') or callback_details.get('callback_date', 'TBD')}")
+            print(f"   Callback Time: {callback_details.get('callback_time', 'TBD')}")
+            print(f"   Callback Day: {callback_details.get('callback_day', 'TBD')}")
+            print(f"   Callback Period: {callback_details.get('callback_period', 'TBD')}")
+
+            # Mark in queue manager
+            if not single_call_patient_info and current_record:
+                callback_info = f"Date: {callback_details.get('normalized_callback_date') or callback_details.get('callback_date', 'TBD')}, Time: {callback_details.get('callback_time', 'TBD')}"
+                await call_queue_manager.mark_call_result(CallResult.RESCHEDULE_REQUESTED, callback_info)
+
+            call_outcome_detected = CallResult.RESCHEDULE_REQUESTED
+            reschedule_state["reschedule_confirmed"] = True
+            print("📋 Reschedule confirmed - call will terminate after confirmation message")
+            return True
+    else:
+        print(f"⚠️ No callback timing details provided - saving as general reschedule request")
+        # Still save to sheet even without specific timing
+        success = await append_reschedule_to_sheets(patient_record, callback_details)
+        if success:
+            call_outcome_detected = CallResult.RESCHEDULE_REQUESTED
+            reschedule_state["reschedule_confirmed"] = True
+            return True
+
+    return False
+
 
 async def process_conversation_outcome():
     """Process conversation outcome and save to Google Sheets"""
     global call_outcome_detected, current_call_uuid
 
     # Get current record from enhanced queue manager
-    current_record = call_queue_manager.get_current_record()
+    """ current_record = call_queue_manager.get_current_record()
     if not current_record:
         print(f"❌ No current record available for outcome processing")
-        return
+        return """
+
+    if single_call_patient_info:
+        # Use single call patient info
+        current_record = single_call_patient_info.copy()
+        logger.info(f"📞 Using single call patient info: {patient_record['name']}")
+    else:
+         # Get current record from queue manager (existing logic)
+        current_record = call_queue_manager.get_current_record()
 
     # Convert CallRecord to dict format for Google Sheets functions
     patient_record = {
@@ -1534,23 +1913,25 @@ async def handle_media_stream(websocket: WebSocket):
                                 'slot book कर लिया'
                             ]
 
-                            # Check for reschedule triggers
-                            reschedule_triggers = [
-                                'बिल्कुल समझ सकती हूँ',
-                                'आप बताइए कि कब',
-                                'tentative slot hold कर लेती हूँ',
-                                'partner से पूछना है'
-                            ]
-
+                            # Enhanced trigger handling in media stream
                             if any(re.search(trigger, transcript, re.IGNORECASE) for trigger in appointment_triggers):
                                 print(f"✅ APPOINTMENT trigger detected: {transcript}")
                                 await process_conversation_outcome()
-                            elif any(re.search(trigger, transcript, re.IGNORECASE) for trigger in reschedule_triggers):
-                                print(f"🔄 RESCHEDULE trigger detected: {transcript}")
-                                await process_conversation_outcome()
+                            else:
+                                # Handle reschedule triggers with state management
+                                reschedule_completed = await handle_reschedule_triggers(transcript)
+                                if reschedule_completed:
+                                    # Schedule call termination after confirmation
+                                    print(f"🔚 Reschedule completed - scheduling call termination")
+                                    await asyncio.sleep(3)  # Give time for final message
+                                    await terminate_call_gracefully(websocket, realtime_ai_ws, "reschedule_completed")
+                                    return
 
-                            # Check for termination conditions
+                            # Check for termination conditions (both appointment and reschedule)
                             should_terminate, termination_reason = should_terminate_call(transcript)
+                            if not should_terminate:
+                                should_terminate, termination_reason = should_terminate_reschedule_call(transcript)
+
                             if should_terminate:
                                 print(f"🔚 Termination triggered: {termination_reason}")
                                 await terminate_call_gracefully(websocket, realtime_ai_ws, termination_reason)
@@ -1717,7 +2098,6 @@ CONVERSATION FLOW:
 
 OPENING:
 "नमस्ते {greeting_name}, मैं Ritika बोल रही हूँ Aveya IVF – Rajouri Garden से। आप कैसे हैं आज?"
-(रुकें, जवाब का इंतज़ार करें और जवाब acknowledge करें)
 "अच्छा सुनकर अच्छा लगा "
 "हमें हाल ही में एक फॉर्म मिला था – जिसमें fertility को लेकर थोड़ी clarity माँगी गई थी। शायद आपने या आपके किसी family member ने भरा हो। क्या आपको थोड़ा याद आ रहा है?"
 
@@ -1735,20 +2115,32 @@ OFFER EXPLANATION:
 "इस हफ्ते 1000 रुपये वाली clarity consultation पूरी तरह free रखी गई है – ताकि couples सही guidance ले सकें।"
 "ये personal session होता है – जहाँ doctor आपके case को ध्यान से समझते हैं और आपके doubts clear करते हैं। कोई obligation नहीं है।"
 
-SLOT SUGGESTION:
+SLOT_SUGGESTION =
 "अगर आपको लगे कि ये session helpful हो सकता है, तो मैं एक छोटा सा slot block कर देती हूँ।"
-"आपके लिए कौन सा day ज़्यादा convenient रहेगा – Monday से Saturday के बीच?"
-(जवाब सुनें और acknowledge करें)
+"आपके लिए कौन सी date convenient रहेगी?"
 "Perfect! और उस दिन कौन सा time better रहेगा – morning, afternoon या evening?"
+"Morning में 10 बजे से 12 बजे तक available है, afternoon में 2 बजे से 4 बजे तक, और evening में 5 बजे से 7 बजे तक। कौन सा slot आपके लिए convenient है?"
 
+
+RESCHEDULE_FLOW =
 RESCHEDULE (Use ONLY these phrases when user wants to reschedule):
 "बिल्कुल समझ सकती हूँ "
-"आप बताइए कि कब karu call"
-"tentative slot hold कर लेती हूँ"
+"आप बताइए कि कब call करूं?"
+"कौन सी date और time आपके लिए convenient होगी?"
+(Wait for user response with date/time)
+"Perfect! तो मैं आपके लिए [Date] को [Time] के लिए callback schedule कर देती हूँ।"
+"हमारी team आपको [Date] को [Time] पर call करेगी।"
 
-BOOKING CONFIRMATION:
-"तो ठीक है, मैं आपके लिए [day] [time] का slot reserve कर रही हूँ।"
-"Great! तो मैंने doctor के calendar में [Day + Time] का slot book कर लिया है – सिर्फ आपके लिए।"
+RESCHEDULE_CONFIRMATION:
+"Great! आपका reschedule request confirm हो गया है।"
+"हम आपको [Date] को [Time] पर call करेंगे।"
+"अगर कोई urgent requirement हो तो आप हमें WhatsApp कर सकते हैं।"
+"धन्यवाद! आपका दिन मंगलमय हो।"
+
+BOOKING_CONFIRMATION = 
+"Perfect! तो मैं आपके लिए [specific_date] को [specific_time] का slot reserve कर रही हूँ।"
+"Great! तो मैंने doctor के calendar में [Date + Time] का slot book कर लिया है – सिर्फ आपके लिए।"
+"आपका appointment [Date] को [Time] पर confirm हो गया है।"
 "बस एक छोटी request – अगर किसी reason से आप नहीं आ पाएं, तो please एक WhatsApp message कर दीजिए।"
 
 ENDING:

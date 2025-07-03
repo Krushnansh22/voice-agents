@@ -445,62 +445,107 @@ class GoogleSheetsService:
             logger.error(f"❌ Failed to save appointment: {e}")
             return False
 
+
+    def _calculate_reschedule_priority(self, callback_details: Dict) -> str:
+            """Calculate priority based on callback details"""
+            try:
+                from datetime import datetime, timedelta
+                
+                callback_date = callback_details.get('normalized_callback_date') or callback_details.get('callback_date', '')
+                callback_time = callback_details.get('callback_time', '')
+                callback_day = callback_details.get('callback_day', '')
+                
+                # High priority for urgent/immediate requests
+                if any(keyword in callback_date.lower() for keyword in ['आज', 'today', 'कल', 'tomorrow']):
+                    return "High"
+                
+                # High priority for specific date within next 3 days
+                if callback_date and callback_date != 'TBD':
+                    try:
+                        # Try to parse DD-MM-YYYY format
+                        if '-' in callback_date and len(callback_date.split('-')) == 3:
+                            parts = callback_date.split('-')
+                            callback_datetime = datetime(int(parts[2]), int(parts[1]), int(parts[0]))
+                            days_diff = (callback_datetime - datetime.now()).days
+                            
+                            if days_diff <= 3:
+                                return "High"
+                            elif days_diff <= 7:
+                                return "Medium"
+                    except:
+                        pass
+                
+                # Medium priority for specific time mentioned
+                if callback_time and callback_time != 'TBD':
+                    return "Medium"
+                
+                # Medium priority for specific day mentioned
+                if callback_day and callback_day not in ['', 'TBD']:
+                    return "Medium"
+                
+                # Default priority
+                return "Normal"
+                
+            except Exception as e:
+                logger.warning(f"⚠️ Error calculating priority: {e}")
+                return "Normal"
+    # Update your existing append_reschedule method
     async def append_reschedule(self, patient_record: Dict, callback_details: Dict = None) -> bool:
-        """Append reschedule request to Reschedule_Requests worksheet"""
+        """Append reschedule request to reschedule_request_sheets worksheet"""
         try:
             logger.info(f"📅 Saving reschedule request for {patient_record.get('name', 'Unknown')}")
 
+            # Use reschedule_request_sheets worksheet
             worksheet = await asyncio.get_event_loop().run_in_executor(
-                self.executor, lambda: self.current_spreadsheet.worksheet(self.worksheets['reschedules'])
+                self.executor, lambda: self.current_spreadsheet.worksheet('Reschedule_Requests')
             )
 
-            # Process callback details
+            # Process callback details with your enhanced logic
             callback_date = ""
             callback_time = ""
             callback_day = ""
             callback_period = ""
-            priority = "Medium"
+            priority = "Normal"
 
             if callback_details:
-                callback_date = callback_details.get('callback_date', "")
+                # Use normalized date if available
+                callback_date = callback_details.get('normalized_callback_date') or callback_details.get('callback_date', "")
                 callback_time = callback_details.get('callback_time', "")
                 callback_day = callback_details.get('callback_day', "")
                 callback_period = callback_details.get('callback_period', "")
 
-                # Calculate priority based on specificity
-                specificity_score = 0
-                if callback_date: specificity_score += 3
-                if callback_time: specificity_score += 2
-                if callback_day: specificity_score += 2
-                if callback_period: specificity_score += 1
+                # Enhanced priority calculation using your existing logic
+                priority = self._calculate_reschedule_priority(callback_details)
 
-                if specificity_score >= 5:
-                    priority = "High"
-                elif specificity_score >= 3:
-                    priority = "Medium"
-                else:
-                    priority = "Low"
-
+            # Prepare row data matching your exact headers:
+            # Name, Phone Number, Address, Age, Gender, Call Timestamp, 
+            # Preferred Callback Date, Preferred Callback Time, Preferred Callback Day, 
+            # Preferred Callback Period, Status, Priority
             row_data = [
-                patient_record.get('name', ''),
-                patient_record.get('phone_number', ''),
-                patient_record.get('address', ''),
-                patient_record.get('age', ''),
-                patient_record.get('gender', ''),
-                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                callback_date,
-                callback_time,
-                callback_day,
-                callback_period,
-                "Pending Callback",
-                priority
+                patient_record.get('name', ''),                          # Name
+                patient_record.get('phone_number', ''),                  # Phone Number
+                patient_record.get('address', ''),                       # Address
+                patient_record.get('age', ''),                          # Age
+                patient_record.get('gender', ''),                       # Gender
+                datetime.now().strftime("%d-%m-%Y %H:%M:%S"),           # Call Timestamp
+                callback_date,                                           # Preferred Callback Date
+                callback_time,                                           # Preferred Callback Time
+                callback_day,                                            # Preferred Callback Day
+                callback_period,                                         # Preferred Callback Period
+                "Reschedule Requested",                                  # Status
+                priority                                                 # Priority
             ]
 
             await asyncio.get_event_loop().run_in_executor(
                 self.executor, lambda: worksheet.append_row(row_data)
             )
 
-            logger.info(f"✅ Reschedule request saved successfully")
+            logger.info(f"✅ Reschedule request saved successfully to reschedule_request_sheets")
+            logger.info(f"   Patient: {patient_record.get('name', 'Unknown')}")
+            logger.info(f"   Phone: {patient_record.get('phone_number', 'Unknown')}")
+            logger.info(f"   Callback Date: {callback_date}")
+            logger.info(f"   Callback Time: {callback_time}")
+            logger.info(f"   Priority: {priority}")
             return True
 
         except Exception as e:
