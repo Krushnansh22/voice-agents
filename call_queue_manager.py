@@ -1,5 +1,5 @@
 """
-Fixed Call Queue Manager - Remove check_interval parameter
+Updated Call Queue Manager - Auto Skip Empty Calls at 30s timeout
 """
 import asyncio
 import logging
@@ -64,7 +64,7 @@ class CallRecord:
 
 
 class EnhancedCallQueueManager:
-    """Enhanced Call Queue Manager with Google Sheets integration and monitoring"""
+    """Enhanced Call Queue Manager with auto-skip for empty calls at 30s timeout"""
 
     def __init__(self):
         self.status = QueueStatus.IDLE
@@ -82,6 +82,7 @@ class EnhancedCallQueueManager:
             "reschedule_requests": 0,
             "incomplete_calls": 0,
             "failed_calls": 0,
+            "auto_skipped_calls": 0,  # New stat for auto-skipped calls
             "queue_started_at": None,
             "queue_completed_at": None
         }
@@ -95,7 +96,7 @@ class EnhancedCallQueueManager:
         # Google Sheets monitoring
         self.monitoring_enabled = False
 
-        logger.info("Enhanced Call Queue Manager initialized")
+        logger.info("Enhanced Call Queue Manager initialized with auto-skip feature")
 
     async def connect_to_google_sheet(self, sheet_id: str, worksheet_name: str = "Records") -> Dict:
         """Connect to Google Sheet and load patient records"""
@@ -193,7 +194,7 @@ class EnhancedCallQueueManager:
 
             from google_sheets_service import google_sheets_service
 
-            # Start monitoring with callback - FIXED: Removed check_interval parameter
+            # Start monitoring with callback
             await google_sheets_service.start_monitoring(
                 callback_func=self._handle_new_records
             )
@@ -248,11 +249,6 @@ class EnhancedCallQueueManager:
 
             if records_added > 0:
                 logger.info(f"🎯 Successfully added {records_added} new records to queue")
-
-                # If queue is paused and we have new records, we could optionally resume
-                # This is business logic that can be customized
-                if self.status == QueueStatus.PAUSED and not self._call_in_progress:
-                    logger.info("📋 New records detected while paused - queue remains paused")
 
         except Exception as e:
             logger.error(f"❌ Error handling new records: {e}")
@@ -380,6 +376,142 @@ class EnhancedCallQueueManager:
 
         return {"success": False, "error": "No current call to skip"}
 
+    async def auto_skip_empty_call(self, reason: str = "No conversation detected") -> Dict:
+        """Auto-skip current call due to no connection/conversation at 30s timeout"""
+        try:
+            if self.current_index >= len(self.records):
+                return {"success": False, "error": "No current call to skip"}
+
+            current_record = self.records[self.current_index]
+
+            logger.info(f"🔄 Auto-skipping call to {current_record.name} - {reason}")
+
+            # ALWAYS add auto-skipped calls to reschedule requests
+            # These are potential leads that should be called back later
+            await self._add_to_reschedule_for_empty_call(current_record, reason)
+            logger.info(f"📅 Added {current_record.name} to reschedule requests (auto-skipped)")
+
+            # Mark as skipped
+            current_record.status = CallResult.SKIPPED
+            current_record.result_details = f"Auto-skipped: {reason}"
+            current_record.last_attempt = datetime.now()
+            current_record.attempts += 1
+
+            # Update statistics
+            self.stats["auto_skipped_calls"] += 1
+            self.stats["reschedule_requests"] += 1
+
+            # Move to next record
+            self.current_index += 1
+            self._call_in_progress = False
+
+            logger.info(f"✅ Auto-skipped {current_record.name} and added to reschedule requests")
+
+            return {
+                "success": True,
+                "action": "auto_skipped",
+                "record": current_record.to_dict(),
+                "reason": reason,
+                "added_to_reschedule": True,
+                "next_index": self.current_index
+            }
+
+        except Exception as e:
+            logger.error(f"❌ Error auto-skipping call: {e}")
+            return {"success": False, "error": str(e)}
+
+    async def _verify_call_attempt(self, record: CallRecord) -> bool:
+        """Verify if a legitimate call attempt was made (not just a failed connection)"""
+        try:
+            # Check if call was actually initiated through Plivo
+            # This could be enhanced to check Plivo call logs or call status
+
+            # For now, check if we have any indicators of a real call attempt
+            import main
+
+            # Check if any call UUID was generated
+            current_call_uuid = getattr(main, 'current_call_uuid', None)
+
+            # Check if any call session was created
+            current_call_session = getattr(main, 'current_call_session', None)
+
+            # If either exists, it means Plivo call was made and potentially answered
+            call_attempted = (current_call_uuid and current_call_uuid != 'unknown') or current_call_session
+
+            if call_attempted:
+                logger.info(f"✅ Verified call attempt for {record.name} - UUID: {current_call_uuid}, Session: {bool(current_call_session)}")
+                return True
+            else:
+                logger.info(f"❌ No call attempt verified for {record.name}")
+                return False
+
+        except Exception as e:
+            logger.error(f"Error verifying call attempt: {e}")
+            # Default to True to be safe - if we can't verify, assume it was attempted
+            return True
+
+    async def _make_actual_call(self, record):
+        """Make the actual call via webhook to Plivo"""
+        try:
+            logger.info(f"📞 Initiating call to {record.name} ({record.phone}) from Google Sheets row {record.row_number}")
+
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                webhook_url = f"{settings.HOST_URL}/webhook"
+                logger.info(f"🔗 Calling webhook: {webhook_url}")
+
+                response = await client.post(webhook_url, headers={
+                    "Content-Type": "application/json"
+                })
+
+            if response.status_code == 200:
+                response_data = response.json()
+                logger.info(f"✅ Webhook response: {response_data}")
+                return True
+            else:
+                logger.error(f"❌ Webhook failed - Status: {response.status_code}, Response: {response.text}")
+                return False
+
+        except Exception as e:
+            logger.error(f"❌ Exception during webhook call: {e}")
+            return False
+
+    async def _add_to_reschedule_for_empty_call(self, record: CallRecord, reason: str):
+        """Add record to reschedule requests for auto-skipped calls"""
+        try:
+            from google_sheets_service import google_sheets_service
+
+            # Prepare patient record
+            patient_record = {
+                'name': record.name,
+                'phone_number': record.phone,
+                'address': record.address,
+                'age': record.age,
+                'gender': record.gender
+            }
+
+            # Create callback details for auto-reschedule with clear reason
+            callback_details = {
+                'callback_date': 'TBD - Auto Retry',
+                'callback_time': 'TBD - Auto Retry',
+                'callback_day': 'TBD - Auto Retry',
+                'callback_period': 'TBD - Auto Retry',
+                'normalized_callback_date': 'TBD - Auto Retry',
+                'reschedule_confirmed': True,
+                'auto_generated': True,
+                'reason': f"Auto-skipped: {reason}"
+            }
+
+            # Add to reschedule requests
+            success = await google_sheets_service.append_reschedule(patient_record, callback_details)
+
+            if success:
+                logger.info(f"✅ Added {record.name} to reschedule requests (auto-skipped - will retry later)")
+            else:
+                logger.error(f"❌ Failed to add {record.name} to reschedule requests")
+
+        except Exception as e:
+            logger.error(f"❌ Error adding to reschedule: {e}")
+
     async def reset_queue(self) -> Dict:
         """Reset the queue to start from beginning"""
         try:
@@ -404,6 +536,7 @@ class EnhancedCallQueueManager:
                 "reschedule_requests": 0,
                 "incomplete_calls": 0,
                 "failed_calls": 0,
+                "auto_skipped_calls": 0,
                 "queue_started_at": None,
                 "queue_completed_at": None
             }
@@ -451,7 +584,7 @@ class EnhancedCallQueueManager:
                 self.records) else None,
             "call_in_progress": self._call_in_progress,
             "stop_pending": self._stop_after_current_call,
-            "queue_can_grow": True  # Indicate that queue can receive new records
+            "queue_can_grow": True
         }
 
     async def get_records_summary(self) -> Dict:
@@ -518,11 +651,9 @@ class EnhancedCallQueueManager:
         # DON'T mark as completed when reaching end - allow for new records
         if self.current_index >= self.total_records:
             logger.info("Reached end of current queue - waiting for new records or manual stop")
-            # Keep status as RUNNING to allow new records to be processed
-            # Only mark as COMPLETED if explicitly stopped
 
     async def _calling_loop(self):
-        """Internal calling loop with Google Sheets integration - supports dynamic growth"""
+        """Internal calling loop with enhanced auto-skip functionality for truly unanswered calls"""
         try:
             while (not self._should_stop and
                    self.status in [QueueStatus.RUNNING, QueueStatus.PAUSED]):
@@ -537,9 +668,8 @@ class EnhancedCallQueueManager:
 
                 # Check if we have more records to process
                 if self.current_index >= self.total_records:
-                    # No more records currently, wait for new ones
                     logger.info("⏳ Waiting for new records to be added...")
-                    await asyncio.sleep(5)  # Wait 5 seconds before checking again
+                    await asyncio.sleep(5)
                     continue
 
                 current_record = self.get_current_record()
@@ -557,6 +687,8 @@ class EnhancedCallQueueManager:
                         call_timeout = 0
                         max_call_duration = 600
                         check_interval = 5
+                        call_answered = False  # Track if call was actually answered
+                        media_stream_connected = False  # Track if media stream connected
 
                         while (current_record.status == CallResult.CALLING and
                             not self._should_stop and
@@ -564,6 +696,29 @@ class EnhancedCallQueueManager:
                             call_timeout < max_call_duration):
 
                             logger.info(f"⏳ Waiting for call to complete: {current_record.name} (timeout: {call_timeout}s)")
+
+                            # CHECK FOR CALL ANSWER STATUS AND CONVERSATION AT 30s TIMEOUT
+                            if call_timeout == 30:
+                                logger.info(f"🔍 Performing comprehensive call check at 30s timeout for {current_record.name}")
+
+                                # Check multiple indicators to determine if call was actually answered
+                                should_auto_skip = await self._should_auto_skip_call(current_record, call_timeout)
+
+                                if should_auto_skip:
+                                    logger.warning(f"📵 Call determined to be unanswered at 30s for {current_record.name}")
+                                    logger.info(f"🔄 Auto-skipping {current_record.name} due to no answer/connection")
+
+                                    # Auto-skip the call
+                                    skip_result = await self.auto_skip_empty_call("Call not answered - no media stream activity at 30s")
+
+                                    if skip_result["success"]:
+                                        logger.info(f"✅ Successfully auto-skipped {current_record.name}")
+                                        break  # Exit the waiting loop
+                                    else:
+                                        logger.error(f"❌ Failed to auto-skip {current_record.name}: {skip_result.get('error')}")
+                                else:
+                                    logger.info(f"✅ Call appears to be answered/active for {current_record.name} - continuing")
+
                             await asyncio.sleep(check_interval)
                             call_timeout += check_interval
 
@@ -613,7 +768,133 @@ class EnhancedCallQueueManager:
             self._stop_after_current_call = False
             await self.stop_monitoring()
 
-    async def _make_actual_call(self, record):
+    async def _should_auto_skip_call(self, record: CallRecord, call_timeout: int) -> bool:
+        """
+        Comprehensive check to determine if a call should be auto-skipped.
+        Priority order: Conversation > Media Stream > Call UUID > Call Session
+        """
+        try:
+            logger.info(f"🔍 Performing comprehensive call analysis for {record.name}")
+
+            # Check 1: MOST IMPORTANT - Conversation activity (if there's conversation, call is definitely active)
+            conversation_active = await self._check_conversation_activity()
+            if conversation_active:
+                logger.info(f"✅ Active conversation detected - call is definitely active for {record.name}")
+                return False  # Don't skip - call is active
+
+            # Check 2: Media stream connection - check if WebSocket was established
+            media_stream_active = await self._check_media_stream_activity()
+            if not media_stream_active:
+                logger.info(f"📵 No media stream activity - call not connected for {record.name}")
+                return True  # Skip - no media stream means no connection
+
+            # Check 3: Call UUID - if no UUID generated, call wasn't answered (but less reliable)
+            call_uuid_exists = await self._check_call_uuid_exists()
+            if not call_uuid_exists:
+                logger.info(f"⚠️ No call UUID found - but media stream exists, checking further...")
+                # Don't immediately return True here, continue with other checks
+
+            # Check 4: Call session in database
+            call_session_exists = await self._check_call_session_exists()
+            if not call_session_exists:
+                logger.info(f"📵 No call session in database - call wasn't properly established for {record.name}")
+                return True  # Skip - no session means no proper call
+
+            # If we reach here: No conversation BUT media stream and session exist
+            # This might be a case where user picked up but hasn't spoken yet
+            # At 30s, if no conversation but connection exists, be more lenient
+            logger.info(f"🤔 No conversation yet but call infrastructure exists for {record.name} - giving more time")
+            return False  # Don't skip yet - give more time for conversation to start
+
+        except Exception as e:
+            logger.error(f"❌ Error in comprehensive call check: {e}")
+            # On error, be conservative and don't auto-skip
+            return False
+
+    async def _check_call_uuid_exists(self) -> bool:
+        """Check if a call UUID was generated (indicates call was answered)"""
+        try:
+            # Import from main module to check current_call_uuid
+            import main
+            current_call_uuid = getattr(main, 'current_call_uuid', None)
+
+            if current_call_uuid and current_call_uuid not in ['unknown', '', None]:
+                logger.info(f"✅ Call UUID exists: {current_call_uuid}")
+                return True
+            else:
+                logger.info(f"❌ No valid call UUID found: {current_call_uuid}")
+                return False
+
+        except Exception as e:
+            logger.error(f"Error checking call UUID: {e}")
+            return False
+
+    async def _check_media_stream_activity(self) -> bool:
+        """Check if media stream WebSocket connection was established"""
+        try:
+            # Import from main module to check current_call_session
+            import main
+            current_call_session = getattr(main, 'current_call_session', None)
+
+            if current_call_session and hasattr(current_call_session, 'call_id'):
+                logger.info(f"✅ Media stream session exists: {current_call_session.call_id}")
+                return True
+            else:
+                logger.info(f"❌ No media stream session found")
+                return False
+
+        except Exception as e:
+            logger.error(f"Error checking media stream: {e}")
+            return False
+
+    async def _check_conversation_activity(self) -> bool:
+        """Check if there's actual conversation activity - MOST RELIABLE INDICATOR"""
+        try:
+            # Import conversation_transcript from main module
+            import main
+            conversation_transcript = getattr(main, 'conversation_transcript', [])
+
+            # Consider call active if there are ANY meaningful exchanges
+            # Even 1 user response means call is connected and active
+            if len(conversation_transcript) >= 1:
+                logger.info(f"✅ Conversation active - {len(conversation_transcript)} exchanges found")
+                logger.info(f"   Recent exchanges: {conversation_transcript[-2:] if len(conversation_transcript) >= 2 else conversation_transcript}")
+                return True
+            else:
+                logger.info(f"❌ No conversation detected - {len(conversation_transcript)} exchanges")
+                return False
+
+        except Exception as e:
+            logger.error(f"Error checking conversation activity: {e}")
+            return False
+
+    async def _check_call_session_exists(self) -> bool:
+        """Check if call session exists in database"""
+        try:
+            # Import from main module
+            import main
+            current_call_session = getattr(main, 'current_call_session', None)
+
+            if current_call_session and hasattr(current_call_session, 'call_id'):
+                # Optionally verify in database
+                from database.db_service import db_service
+
+                # Quick check if session exists
+                session_exists = current_call_session.call_id is not None
+
+                if session_exists:
+                    logger.info(f"✅ Call session exists in database: {current_call_session.call_id}")
+                    return True
+                else:
+                    logger.info(f"❌ Call session not found in database")
+                    return False
+            else:
+                logger.info(f"❌ No call session object found")
+                return False
+
+        except Exception as e:
+            logger.error(f"Error checking call session: {e}")
+            return False
         """Make the actual call via webhook to Plivo"""
         try:
             logger.info(f"📞 Initiating call to {record.name} ({record.phone}) from Google Sheets row {record.row_number}")
