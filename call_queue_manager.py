@@ -814,9 +814,20 @@ class EnhancedCallQueueManager:
     async def _check_call_uuid_exists(self) -> bool:
         """Check if a call UUID was generated (indicates call was answered)"""
         try:
-            # Import from main module to check current_call_uuid
-            import main
-            current_call_uuid = getattr(main, 'current_call_uuid', None)
+            # Check if main module has the global variables
+            try:
+                # Try different ways to access the main module
+                import sys
+                main_module = sys.modules.get('__main__')
+                if main_module:
+                    current_call_uuid = getattr(main_module, 'current_call_uuid', None)
+                else:
+                    # Fallback: try importing main directly
+                    import main
+                    current_call_uuid = getattr(main, 'current_call_uuid', None)
+            except:
+                # Last resort: check if we can access via other methods
+                current_call_uuid = None
 
             if current_call_uuid and current_call_uuid not in ['unknown', '', None]:
                 logger.info(f"✅ Call UUID exists: {current_call_uuid}")
@@ -832,15 +843,49 @@ class EnhancedCallQueueManager:
     async def _check_media_stream_activity(self) -> bool:
         """Check if media stream WebSocket connection was established"""
         try:
-            # Import from main module to check current_call_session
-            import main
-            current_call_session = getattr(main, 'current_call_session', None)
+            # Check multiple indicators of media stream activity
+            media_stream_active = False
 
-            if current_call_session and hasattr(current_call_session, 'call_id'):
-                logger.info(f"✅ Media stream session exists: {current_call_session.call_id}")
+            # Method 1: Check current_call_session
+            try:
+                import sys
+                main_module = sys.modules.get('__main__')
+                if main_module:
+                    current_call_session = getattr(main_module, 'current_call_session', None)
+                    if current_call_session and hasattr(current_call_session, 'call_id'):
+                        logger.info(f"✅ Media stream session exists: {current_call_session.call_id}")
+                        media_stream_active = True
+                else:
+                    import main
+                    current_call_session = getattr(main, 'current_call_session', None)
+                    if current_call_session and hasattr(current_call_session, 'call_id'):
+                        logger.info(f"✅ Media stream session exists: {current_call_session.call_id}")
+                        media_stream_active = True
+            except Exception as e:
+                logger.warning(f"Could not check current_call_session: {e}")
+
+            # Method 2: Check if media stream flag exists (we'll add this to main)
+            try:
+                import sys
+                main_module = sys.modules.get('__main__')
+                if main_module:
+                    media_stream_connected = getattr(main_module, 'media_stream_connected', False)
+                    if media_stream_connected:
+                        logger.info(f"✅ Media stream flag indicates connection")
+                        media_stream_active = True
+                else:
+                    import main
+                    media_stream_connected = getattr(main, 'media_stream_connected', False)
+                    if media_stream_connected:
+                        logger.info(f"✅ Media stream flag indicates connection")
+                        media_stream_active = True
+            except Exception as e:
+                logger.warning(f"Could not check media_stream_connected flag: {e}")
+
+            if media_stream_active:
                 return True
             else:
-                logger.info(f"❌ No media stream session found")
+                logger.info(f"❌ No media stream activity detected")
                 return False
 
         except Exception as e:
@@ -850,12 +895,40 @@ class EnhancedCallQueueManager:
     async def _check_conversation_activity(self) -> bool:
         """Check if there's actual conversation activity - MOST RELIABLE INDICATOR"""
         try:
-            # Import conversation_transcript from main module
-            import main
-            conversation_transcript = getattr(main, 'conversation_transcript', [])
+            # Check conversation transcript with multiple access methods
+            conversation_transcript = []
 
-            # Consider call active if there are ANY meaningful exchanges
-            # Even 1 user response means call is connected and active
+            # Method 1: Direct module access
+            try:
+                import sys
+                main_module = sys.modules.get('__main__')
+                if main_module:
+                    conversation_transcript = getattr(main_module, 'conversation_transcript', [])
+                else:
+                    import main
+                    conversation_transcript = getattr(main, 'conversation_transcript', [])
+            except Exception as e:
+                logger.warning(f"Could not access conversation_transcript: {e}")
+
+            # Method 2: Check conversation flag (we'll add this to main)
+            try:
+                import sys
+                main_module = sys.modules.get('__main__')
+                if main_module:
+                    conversation_active_flag = getattr(main_module, 'conversation_active_flag', False)
+                    conversation_count = getattr(main_module, 'conversation_count', 0)
+                else:
+                    import main
+                    conversation_active_flag = getattr(main, 'conversation_active_flag', False)
+                    conversation_count = getattr(main, 'conversation_count', 0)
+
+                if conversation_active_flag and conversation_count > 0:
+                    logger.info(f"✅ Conversation flag indicates activity - {conversation_count} exchanges")
+                    return True
+            except Exception as e:
+                logger.warning(f"Could not check conversation flags: {e}")
+
+            # Check actual transcript length
             if len(conversation_transcript) >= 1:
                 logger.info(f"✅ Conversation active - {len(conversation_transcript)} exchanges found")
                 logger.info(f"   Recent exchanges: {conversation_transcript[-2:] if len(conversation_transcript) >= 2 else conversation_transcript}")

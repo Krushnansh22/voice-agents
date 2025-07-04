@@ -58,6 +58,11 @@ call_outcome_detected = False
 
 app = FastAPI()
 
+# Global flags for call queue manager checks
+media_stream_connected = False
+conversation_active_flag = False
+conversation_count = 0
+
 # Global variable to store conversation transcripts
 conversation_transcript = []
 
@@ -776,7 +781,7 @@ async def process_conversation_outcome():
     if single_call_patient_info:
         # Use single call patient info
         current_record = single_call_patient_info.copy()
-        logger.info(f"📞 Using single call patient info: {patient_record['name']}")
+        logger.info(f"📞 Using single call patient info: {current_record['name']}")
     else:
          # Get current record from queue manager (existing logic)
         current_record = call_queue_manager.get_current_record()
@@ -832,10 +837,16 @@ call_analyzer = CallAnalyzer()
 async def terminate_call_gracefully(websocket, realtime_ai_ws, reason="completed"):
     """Gracefully terminate call and clean up all connections"""
     global current_call_session, current_call_uuid, call_timer_task, call_outcome_detected
+    global media_stream_connected, conversation_active_flag, conversation_count
+
+    # Reset flags
+
 
     try:
         print(f"🔚 Terminating call gracefully. Reason: {reason}")
-
+        media_stream_connected = False
+        conversation_active_flag = False
+        conversation_count = 0
         # Cancel the call timer if it's running
         if call_timer_task and not call_timer_task.done():
             call_timer_task.cancel()
@@ -1767,9 +1778,14 @@ async def get_single_call_status():
 async def handle_media_stream(websocket: WebSocket):
     """Handle WebSocket connections between Plivo and OpenAI"""
     global conversation_transcript, current_call_session, call_start_time, call_outcome_detected
+    global media_stream_connected, conversation_active_flag, conversation_count  # Add these
 
     await websocket.accept()
 
+    # Set media stream flag when connection is established
+    media_stream_connected = True
+    conversation_active_flag = False
+    conversation_count = 0
     # Initialize call tracking
     call_start_time = time.time()
     call_outcome_detected = False
@@ -1846,6 +1862,8 @@ async def handle_media_stream(websocket: WebSocket):
         async def receive_from_twilio():
             """Receive audio data from Twilio and send it to the OpenAI Realtime API"""
             nonlocal stream_sid, latest_media_timestamp
+            global media_stream_connected  # Add this global
+
             try:
                 async for message in websocket.iter_text():
                     data = json.loads(message)
@@ -1859,6 +1877,11 @@ async def handle_media_stream(websocket: WebSocket):
                     elif data['event'] == 'start':
                         stream_sid = data['start']['streamId']
                         print(f"Incoming stream has started {stream_sid}")
+
+                        # Set media stream connected flag when stream starts
+                        media_stream_connected = True
+                        print(f"🔗 Media stream connected flag set: {media_stream_connected}")
+
                         await realtime_ai_ws.send(json.dumps(data))
                         response_start_timestamp_twilio = None
                         latest_media_timestamp = 0
@@ -1872,6 +1895,10 @@ async def handle_media_stream(websocket: WebSocket):
                 if realtime_ai_ws.open:
                     await realtime_ai_ws.close()
 
+                # Reset media stream flag when connection ends
+                media_stream_connected = False
+                print(f"🔗 Media stream disconnected - flag reset: {media_stream_connected}")
+
                 # End call session in MongoDB
                 if current_call_session:
                     await db_service.end_call_session(current_call_session.call_id)
@@ -1880,9 +1907,12 @@ async def handle_media_stream(websocket: WebSocket):
                         status="ended"
                     )
 
+        # Updated send_to_twilio function
         async def send_to_twilio():
             """Receive events from the OpenAI Realtime API, send audio back to Twilio"""
             nonlocal stream_sid, last_assistant_item, response_start_timestamp_twilio
+            global conversation_active_flag, conversation_count  # Add these globals
+
             try:
                 async for openai_message in realtime_ai_ws:
                     response = json.loads(openai_message)
@@ -1895,6 +1925,12 @@ async def handle_media_stream(websocket: WebSocket):
                             if user_transcript:
                                 print(f"User said: {user_transcript}")
                                 conversation_transcript.append(user_transcript)
+
+                                # Set conversation activity flags
+                                conversation_active_flag = True
+                                conversation_count += 1
+                                print(
+                                    f"📝 Conversation activity detected - Count: {conversation_count}, Active: {conversation_active_flag}")
 
                                 # Store user transcript in MongoDB and broadcast
                                 if current_call_session:
@@ -1929,6 +1965,12 @@ async def handle_media_stream(websocket: WebSocket):
                             print(f"AI Response: {transcript}")
 
                             conversation_transcript.append(transcript)
+
+                            # Set conversation activity flags for AI response too
+                            conversation_active_flag = True
+                            conversation_count += 1
+                            print(
+                                f"📝 AI response added - Count: {conversation_count}, Active: {conversation_active_flag}")
 
                             # Store AI response in MongoDB and broadcast
                             if current_call_session:
