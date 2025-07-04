@@ -1,6 +1,6 @@
 """
 Updated Google Sheets Service with Google Drive API Push Notifications
-Real-time monitoring using official Google Drive API
+Real-time monitoring using official Google Drive API + Call Analysis Integration
 """
 import asyncio
 import logging
@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 
 
 class GoogleSheetsService:
-    """Enhanced Google Sheets service with real-time Drive API monitoring"""
+    """Enhanced Google Sheets service with real-time Drive API monitoring and Call Analysis"""
 
     def __init__(self, credentials_file: str = "credentials.json"):
         self.credentials_file = credentials_file
@@ -33,15 +33,16 @@ class GoogleSheetsService:
         self.last_row_count = 0
         self.last_known_data = []
 
-        # Worksheet mappings
+        # Worksheet mappings - Updated with Call_Analysis
         self.worksheets = {
             'records': 'Records',
             'appointments': 'Appointment_Details',
             'reschedules': 'Reschedule_Requests',
-            'incomplete': 'Incomplete_Calls'
+            'incomplete': 'Incomplete_Calls',
+            'analysis': 'Call_Analysis'
         }
 
-        # Headers for each worksheet
+        # Headers for each worksheet - Updated with Call_Analysis
         self.headers = {
             'records': ['Name', 'Phone Number', 'Address', 'Age', 'Gender'],
             'appointments': [
@@ -56,6 +57,11 @@ class GoogleSheetsService:
             'incomplete': [
                 'Name', 'Phone Number', 'Address', 'Age', 'Gender',
                 'Call Timestamp', 'Call Duration (seconds)', 'Reason', 'Notes'
+            ],
+            'analysis': [
+                'Call ID', 'Patient Name', 'Phone Number', 'Call Date',
+                'Call Duration', 'Call Outcome', 'AI Summary', 'Transcript Count',
+                'Outcome Details', 'Analysis Timestamp'
             ]
         }
 
@@ -115,7 +121,7 @@ class GoogleSheetsService:
                     "error": f"Invalid sheet structure: {validation_result['error']}"
                 }
 
-            # Setup result worksheets
+            # Setup result worksheets (including Call_Analysis)
             await self._setup_result_worksheets()
 
             # Setup Drive API monitoring
@@ -298,7 +304,7 @@ class GoogleSheetsService:
             }
 
     async def _setup_result_worksheets(self):
-        """Setup or create result worksheets for appointments, reschedules, etc."""
+        """Setup or create result worksheets for appointments, reschedules, incomplete calls, and call analysis"""
         try:
             for key, worksheet_name in self.worksheets.items():
                 if key == 'records':  # Skip the main records sheet
@@ -307,23 +313,23 @@ class GoogleSheetsService:
                 try:
                     # Try to get existing worksheet
                     await asyncio.get_event_loop().run_in_executor(
-                        self.executor, lambda: self.current_spreadsheet.worksheet(worksheet_name)
+                        self.executor, lambda name=worksheet_name: self.current_spreadsheet.worksheet(name)
                     )
                     logger.info(f"📊 Found existing worksheet: {worksheet_name}")
 
                 except gspread.WorksheetNotFound:
                     # Create new worksheet
                     worksheet = await asyncio.get_event_loop().run_in_executor(
-                        self.executor, lambda: self.current_spreadsheet.add_worksheet(
-                            title=worksheet_name,
+                        self.executor, lambda name=worksheet_name, headers=self.headers[key]: self.current_spreadsheet.add_worksheet(
+                            title=name,
                             rows=1000,
-                            cols=len(self.headers[key])
+                            cols=len(headers)
                         )
                     )
 
                     # Add headers
                     await asyncio.get_event_loop().run_in_executor(
-                        self.executor, lambda: worksheet.append_row(self.headers[key])
+                        self.executor, lambda w=worksheet, h=self.headers[key]: w.append_row(h)
                     )
                     logger.info(f"✅ Created new worksheet: {worksheet_name}")
 
@@ -412,7 +418,7 @@ class GoogleSheetsService:
         except Exception as e:
             logger.error(f"Error stopping monitoring: {e}")
 
-    # Append methods (unchanged from original)
+    # Append methods for different result types
     async def append_appointment(self, appointment_details: Dict, patient_record: Dict) -> bool:
         """Append successful appointment to Appointment_Details worksheet"""
         try:
@@ -445,62 +451,60 @@ class GoogleSheetsService:
             logger.error(f"❌ Failed to save appointment: {e}")
             return False
 
-
     def _calculate_reschedule_priority(self, callback_details: Dict) -> str:
-            """Calculate priority based on callback details"""
-            try:
-                from datetime import datetime, timedelta
-                
-                callback_date = callback_details.get('normalized_callback_date') or callback_details.get('callback_date', '')
-                callback_time = callback_details.get('callback_time', '')
-                callback_day = callback_details.get('callback_day', '')
-                
-                # High priority for urgent/immediate requests
-                if any(keyword in callback_date.lower() for keyword in ['आज', 'today', 'कल', 'tomorrow']):
-                    return "High"
-                
-                # High priority for specific date within next 3 days
-                if callback_date and callback_date != 'TBD':
-                    try:
-                        # Try to parse DD-MM-YYYY format
-                        if '-' in callback_date and len(callback_date.split('-')) == 3:
-                            parts = callback_date.split('-')
-                            callback_datetime = datetime(int(parts[2]), int(parts[1]), int(parts[0]))
-                            days_diff = (callback_datetime - datetime.now()).days
-                            
-                            if days_diff <= 3:
-                                return "High"
-                            elif days_diff <= 7:
-                                return "Medium"
-                    except:
-                        pass
-                
-                # Medium priority for specific time mentioned
-                if callback_time and callback_time != 'TBD':
-                    return "Medium"
-                
-                # Medium priority for specific day mentioned
-                if callback_day and callback_day not in ['', 'TBD']:
-                    return "Medium"
-                
-                # Default priority
-                return "Normal"
-                
-            except Exception as e:
-                logger.warning(f"⚠️ Error calculating priority: {e}")
-                return "Normal"
-    # Update your existing append_reschedule method
+        """Calculate priority based on callback details"""
+        try:
+            from datetime import datetime, timedelta
+
+            callback_date = callback_details.get('normalized_callback_date') or callback_details.get('callback_date', '')
+            callback_time = callback_details.get('callback_time', '')
+            callback_day = callback_details.get('callback_day', '')
+
+            # High priority for urgent/immediate requests
+            if any(keyword in callback_date.lower() for keyword in ['आज', 'today', 'कल', 'tomorrow']):
+                return "High"
+
+            # High priority for specific date within next 3 days
+            if callback_date and callback_date != 'TBD':
+                try:
+                    # Try to parse DD-MM-YYYY format
+                    if '-' in callback_date and len(callback_date.split('-')) == 3:
+                        parts = callback_date.split('-')
+                        callback_datetime = datetime(int(parts[2]), int(parts[1]), int(parts[0]))
+                        days_diff = (callback_datetime - datetime.now()).days
+
+                        if days_diff <= 3:
+                            return "High"
+                        elif days_diff <= 7:
+                            return "Medium"
+                except:
+                    pass
+
+            # Medium priority for specific time mentioned
+            if callback_time and callback_time != 'TBD':
+                return "Medium"
+
+            # Medium priority for specific day mentioned
+            if callback_day and callback_day not in ['', 'TBD']:
+                return "Medium"
+
+            # Default priority
+            return "Normal"
+
+        except Exception as e:
+            logger.warning(f"⚠️ Error calculating priority: {e}")
+            return "Normal"
+
     async def append_reschedule(self, patient_record: Dict, callback_details: Dict = None) -> bool:
-        """Append reschedule request to reschedule_request_sheets worksheet"""
+        """Append reschedule request to Reschedule_Requests worksheet"""
         try:
             logger.info(f"📅 Saving reschedule request for {patient_record.get('name', 'Unknown')}")
 
-            # Use reschedule_request_sheets worksheet
             worksheet = await asyncio.get_event_loop().run_in_executor(
-                self.executor, lambda: self.current_spreadsheet.worksheet('Reschedule_Requests')
+                self.executor, lambda: self.current_spreadsheet.worksheet(self.worksheets['reschedules'])
             )
 
-            # Process callback details with your enhanced logic
+            # Process callback details
             callback_date = ""
             callback_time = ""
             callback_day = ""
@@ -514,13 +518,10 @@ class GoogleSheetsService:
                 callback_day = callback_details.get('callback_day', "")
                 callback_period = callback_details.get('callback_period', "")
 
-                # Enhanced priority calculation using your existing logic
+                # Enhanced priority calculation
                 priority = self._calculate_reschedule_priority(callback_details)
 
-            # Prepare row data matching your exact headers:
-            # Name, Phone Number, Address, Age, Gender, Call Timestamp, 
-            # Preferred Callback Date, Preferred Callback Time, Preferred Callback Day, 
-            # Preferred Callback Period, Status, Priority
+            # Prepare row data matching headers
             row_data = [
                 patient_record.get('name', ''),                          # Name
                 patient_record.get('phone_number', ''),                  # Phone Number
@@ -540,12 +541,7 @@ class GoogleSheetsService:
                 self.executor, lambda: worksheet.append_row(row_data)
             )
 
-            logger.info(f"✅ Reschedule request saved successfully to reschedule_request_sheets")
-            logger.info(f"   Patient: {patient_record.get('name', 'Unknown')}")
-            logger.info(f"   Phone: {patient_record.get('phone_number', 'Unknown')}")
-            logger.info(f"   Callback Date: {callback_date}")
-            logger.info(f"   Callback Time: {callback_time}")
-            logger.info(f"   Priority: {priority}")
+            logger.info(f"✅ Reschedule request saved successfully")
             return True
 
         except Exception as e:
@@ -591,6 +587,77 @@ class GoogleSheetsService:
             logger.error(f"❌ Failed to save incomplete call: {e}")
             return False
 
+    async def append_call_analysis(self, analysis_data: Dict) -> bool:
+        """Append call analysis to Call_Analysis worksheet"""
+        try:
+            logger.info(f"🔍 Saving call analysis for {analysis_data.get('name', 'Unknown')}")
+
+            # Get or create Call_Analysis worksheet
+            try:
+                worksheet = await asyncio.get_event_loop().run_in_executor(
+                    self.executor, lambda: self.current_spreadsheet.worksheet(self.worksheets['analysis'])
+                )
+            except gspread.WorksheetNotFound:
+                # Create the worksheet if it doesn't exist
+                worksheet = await asyncio.get_event_loop().run_in_executor(
+                    self.executor, lambda: self.current_spreadsheet.add_worksheet(
+                        title=self.worksheets['analysis'],
+                        rows=1000,
+                        cols=len(self.headers['analysis'])
+                    )
+                )
+
+                # Add headers
+                await asyncio.get_event_loop().run_in_executor(
+                    self.executor, lambda: worksheet.append_row(self.headers['analysis'])
+                )
+                logger.info(f"✅ Created Call_Analysis worksheet")
+
+            # Prepare row data matching headers
+            row_data = [
+                analysis_data.get('call_id', ''),                        # Call ID
+                analysis_data.get('name', ''),                           # Patient Name
+                analysis_data.get('phone_number', ''),                   # Phone Number
+                analysis_data.get('date', ''),                           # Call Date
+                analysis_data.get('duration', ''),                       # Call Duration
+                analysis_data.get('call_outcome', ''),                   # Call Outcome
+                analysis_data.get('summary', ''),                        # AI Summary
+                analysis_data.get('transcript_count', 0),                # Transcript Count
+                analysis_data.get('outcome_details', ''),                # Outcome Details
+                datetime.now().strftime("%Y-%m-%d %H:%M:%S")             # Analysis Timestamp
+            ]
+
+            await asyncio.get_event_loop().run_in_executor(
+                self.executor, lambda: worksheet.append_row(row_data)
+            )
+
+            logger.info(f"✅ Call analysis saved successfully to Call_Analysis worksheet")
+            return True
+
+        except Exception as e:
+            logger.error(f"❌ Failed to save call analysis: {e}")
+            return False
+
+    async def get_call_analysis_data(self) -> List[Dict]:
+        """Get all call analysis data from Call_Analysis worksheet"""
+        try:
+            worksheet = await asyncio.get_event_loop().run_in_executor(
+                self.executor, lambda: self.current_spreadsheet.worksheet(self.worksheets['analysis'])
+            )
+
+            records = await asyncio.get_event_loop().run_in_executor(
+                self.executor, lambda: worksheet.get_all_records()
+            )
+
+            return records
+
+        except gspread.WorksheetNotFound:
+            logger.warning("Call_Analysis worksheet not found")
+            return []
+        except Exception as e:
+            logger.error(f"Error getting call analysis data: {e}")
+            return []
+
     def get_status(self) -> Dict:
         """Get current service status"""
         return {
@@ -600,7 +667,8 @@ class GoogleSheetsService:
             "drive_monitoring_enabled": self.drive_monitoring_enabled,
             "last_row_count": self.last_row_count,
             "worksheet_name": self.current_sheet.title if self.current_sheet else None,
-            "spreadsheet_title": self.current_spreadsheet.title if self.current_spreadsheet else None
+            "spreadsheet_title": self.current_spreadsheet.title if self.current_spreadsheet else None,
+            "available_worksheets": list(self.worksheets.values())
         }
 
     def __del__(self):

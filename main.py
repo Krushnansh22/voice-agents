@@ -829,6 +829,8 @@ async def process_conversation_outcome():
     print(f"ℹ️ No clear outcome detected yet for {current_record.name} (Row {current_record.row_number})")
 
 call_analyzer = CallAnalyzer()
+
+
 async def terminate_call_gracefully(websocket, realtime_ai_ws, reason="completed"):
     """Gracefully terminate call and clean up all connections"""
     global current_call_session, current_call_uuid, call_timer_task, call_outcome_detected
@@ -862,18 +864,18 @@ async def terminate_call_gracefully(websocket, realtime_ai_ws, reason="completed
                 status="ended"
             )
             print(f"✅ Call session ended in database: {current_call_session.call_id}")
-        
-         # Get call outcome from queue manager if available
+
+        # Get call outcome from queue manager if available
         current_record = call_queue_manager.get_current_record()
         call_result = None
         result_details = None
-        
+
         if current_record:
             call_result = current_record.status.value
             result_details = current_record.result_details
             print(f"📋 Call result from queue manager: {call_result}")
 
-        # Analyze call and save results before clearing data
+        # Analyze call and save results to Google Sheets before clearing data
         if current_call_session and conversation_transcript:
             try:
                 # Prepare call data for analysis
@@ -888,16 +890,16 @@ async def terminate_call_gracefully(websocket, realtime_ai_ws, reason="completed
                     "call_result": call_result,  # From queue manager
                     "result_details": result_details  # Additional details
                 }
-                # Analyze the call
+
+                # Analyze the call and save to Google Sheets
                 analysis_result = await call_analyzer.analyze_call(call_data)
-                
+
                 if analysis_result:
                     print(f"✅ Call analysis completed. Outcome: {analysis_result['call_outcome']}")
-                    
-                    # Save to Excel (appends to existing file)
-                    call_analyzer.save_to_excel([analysis_result])
-                    print("💾 Analysis saved to Excel file")
-                
+                    print("💾 Analysis saved to Google Sheets Call_Analysis worksheet")
+                else:
+                    print("❌ Call analysis failed")
+
             except Exception as e:
                 print(f"❌ Error during call analysis: {e}")
 
@@ -949,7 +951,7 @@ async def terminate_call_gracefully(websocket, realtime_ai_ws, reason="completed
         call_queue_manager.current_index = 0
         call_queue_manager.total_records = 0
 
-         # Clear single call patient info
+        # Clear single call patient info
         global single_call_patient_info
         single_call_patient_info = None
 
@@ -964,6 +966,44 @@ async def terminate_call_gracefully(websocket, realtime_ai_ws, reason="completed
         if call_queue_manager.get_current_record():
             await call_queue_manager.complete_current_call(CallResult.CALL_FAILED, f"Error: {str(e)}")
 
+
+# Optional: Add an API endpoint to view call analysis data
+@app.get("/api/call-analysis")
+async def get_call_analysis():
+    """Get call analysis data from Google Sheets"""
+    try:
+        if not google_sheets_service.current_spreadsheet:
+            raise HTTPException(status_code=400, detail="No Google Sheet connected")
+
+        # Get Call_Analysis worksheet
+        try:
+            worksheet = await asyncio.get_event_loop().run_in_executor(
+                google_sheets_service.executor,
+                lambda: google_sheets_service.current_spreadsheet.worksheet("Call_Analysis")
+            )
+
+            # Get all records
+            records = await asyncio.get_event_loop().run_in_executor(
+                google_sheets_service.executor,
+                lambda: worksheet.get_all_records()
+            )
+
+            return {
+                "success": True,
+                "data": records,
+                "total_calls": len(records)
+            }
+
+        except Exception as worksheet_error:
+            return {
+                "success": False,
+                "error": "Call_Analysis worksheet not found or empty",
+                "data": []
+            }
+
+    except Exception as e:
+        logger.error(f"Failed to get call analysis data: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 async def start_call_timer(websocket, realtime_ai_ws, duration=MAX_CALL_DURATION):
     """Start a timer to automatically terminate the call after specified duration"""
@@ -2189,6 +2229,10 @@ async def startup_event():
     sheets_initialized = await google_sheets_service.initialize()
     if sheets_initialized:
         print("✅ Google Sheets service initialized")
+
+        # Inject Google Sheets service into call analyzer
+        call_analyzer.set_sheets_service(google_sheets_service)
+        print("✅ Call Analyzer integrated with Google Sheets")
     else:
         print("⚠️ Google Sheets service failed to initialize - check creds.json")
 
