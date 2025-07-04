@@ -64,6 +64,7 @@ conversation_transcript = []
 # Global variable to store current call session
 current_call_session = None
 # Global variable to store single call patient info
+current_record=None
 single_call_patient_info = None
 # Global variable to track reschedule state
 reschedule_state = {
@@ -172,19 +173,18 @@ def extract_appointment_details():
         
         # Conversational date formats
         r'(\d{1,2}\s+(?:तारीख|date))',  # "15 तारीख" or "15 date"
-        r'(आज\s+से\s+\d+\s+(?:दिन|day))',  # "आज से 3 दिन" or "आज से 3 day"
         r'(\d+\s+(?:दिसंबर|December|दिसम्बर))',  # "15 दिसंबर" or "15 December"
         r'(\d+\s+(?:जनवरी|January))',  # "20 जनवरी" or "20 January"
         
-        # Relative dates
+      """   # Relative dates
         r'(आज|कल|परसों)',  # today, tomorrow, day after tomorrow
         r'(tomorrow|today|day\s+after\s+tomorrow)',
         r'(next\s+(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday))',
-        r'(अगले\s+(?:सोमवार|मंगलवार|बुधवार|गुरुवार|शुक्रवार|शनिवार|रविवार))',
+        r'(अगले\s+(?:सोमवार|मंगलवार|बुधवार|गुरुवार|शुक्रवार|शनिवार|रविवार))', """
         
-        # Week references with dates
+      """   # Week references with dates
         r'(इस\s+हफ्ते\s+\d{1,2})',  # "इस हफ्ते 15"
-        r'(अगले\s+हफ्ते\s+\d{1,2})',  # "अगले हफ्ते 20"
+        r'(अगले\s+हफ्ते\s+\d{1,2})',  # "अगले हफ्ते 20" """
     ]
 
     # Enhanced time patterns
@@ -506,10 +506,8 @@ async def handle_reschedule_triggers(transcript):
     
     # Confirmation triggers
     confirmation_triggers = [
-        'callback schedule कर देती हूँ',
-        'tentative slot hold कर लेती हूँ',
-        'हम आपको.*call करेंगे',
-        'reschedule request confirm'
+        'Great! आपका reschedule request confirm हो गया है।',
+        'अगर कोई urgent requirement हो तो आप हमें WhatsApp कर सकते हैं।'
     ]
     
     # Check for initial reschedule
@@ -713,7 +711,7 @@ async def process_reschedule_outcome():
             'gender': single_call_patient_info.get('gender', '')
         }
     else:
-        current_record = call_queue_manager.get_current_record()
+        #current_record = call_queue_manager.get_current_record()
         if not current_record:
             print(f"❌ No current record available for reschedule processing")
             return
@@ -876,7 +874,7 @@ async def terminate_call_gracefully(websocket, realtime_ai_ws, reason="completed
             print(f"📋 Call result from queue manager: {call_result}")
 
         # Analyze call and save results to Google Sheets before clearing data
-        if current_call_session and conversation_transcript:
+        if conversation_transcript:
             try:
                 # Prepare call data for analysis
                 call_data = {
@@ -1425,7 +1423,7 @@ async def queue_status_websocket(websocket: WebSocket):
 @app.api_route("/webhook", methods=["GET", "POST"])
 async def webhook_handler(request: Request):
     """FIXED webhook handler for both queue and single calls"""
-    global current_call_uuid
+    global current_call_uuid,current_record
 
     if request.method == "POST":
         print(f"📨 Webhook POST request received!")
@@ -1950,7 +1948,8 @@ async def handle_media_stream(websocket: WebSocket):
 
                             # Check for appointment confirmation triggers
                             appointment_triggers = [
-                                'slot book कर लिया'
+                                """ 'slot reserve कर रही हूँ', """
+                                'आप नहीं आ पाएं, तो please एक WhatsApp message कर दीजिए।'
                             ]
 
                             # Enhanced trigger handling in media stream
@@ -2179,8 +2178,6 @@ RESCHEDULE_CONFIRMATION:
 
 BOOKING_CONFIRMATION = 
 "Perfect! तो मैं आपके लिए [specific_date] को [specific_time] का slot reserve कर रही हूँ।"
-"Great! तो मैंने doctor के calendar में [Date + Time] का slot book कर लिया है – सिर्फ आपके लिए।"
-"आपका appointment [Date] को [Time] पर confirm हो गया है।"
 "बस एक छोटी request – अगर किसी reason से आप नहीं आ पाएं, तो please एक WhatsApp message कर दीजिए।"
 
 ENDING:
