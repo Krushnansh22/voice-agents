@@ -78,6 +78,8 @@ reschedule_state = {
     "callback_details_received": False,
     "reschedule_confirmed": False
 }
+# Add this global variable at the top with other globals
+appointment_booked_pending_end = False
 
 plivo_client = plivo.RestClient(settings.PLIVO_AUTH_ID, settings.PLIVO_AUTH_TOKEN)
 
@@ -162,55 +164,44 @@ def extract_appointment_details():
         "appointment_confirmed": False
     }
 
-    # Enhanced date patterns to capture specific dates
+    # Enhanced date patterns - focusing on specific dates/months only
     date_patterns = [
-        # Standard date formats
+        # DD Month format (most common in conversation)
+        r'(\d{1,2}\s+(?:जनवरी|फरवरी|मार्च|अप्रैल|मई|जून|जुलाई|अगस्त|सितंबर|अक्टूबर|नवंबर|दिसंबर))',
+        r'(\d{1,2}\s+(?:January|February|March|April|May|June|July|August|September|October|November|December))',
+        r'(\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec))',
+        
+        # Standard date formats with separators
         r'(\d{1,2}[-/]\d{1,2}[-/]\d{4})',  # DD-MM-YYYY or DD/MM/YYYY
-        r'(\d{4}[-/]\d{1,2}[-/]\d{1,2})',  # YYYY-MM-DD or YYYY/MM/DD
-        r'(\d{1,2}[-/]\d{1,2}[-/]\d{2})',  # DD-MM-YY or DD/MM/YY
+        r'(\d{4}[-/]\d{1,2}[-/]\d{1,2})',  # YYYY-MM-DD
+        r'(\d{1,2}[-/]\d{1,2}[-/]\d{2})',  # DD-MM-YY
         
-        # Date with month names (English)
-        r'(\d{1,2}\s+(?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{4})',
-        r'(\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\s+\d{4})',
+        # Date with तारीख
+        r'(\d{1,2}\s+तारीख)',  # "5 तारीख"
         
-        # Date with month names (Hindi)
-        r'(\d{1,2}\s+(?:जनवरी|फरवरी|मार्च|अप्रैल|मई|जून|जुलाई|अगस्त|सितंबर|अक्टूबर|नवंबर|दिसंबर)\s+\d{4})',
-        
-        # Conversational date formats
-        r'(\d{1,2}\s+(?:तारीख|date))',  # "15 तारीख" or "15 date"
-        r'(\d+\s+(?:दिसंबर|December|दिसम्बर))',  # "15 दिसंबर" or "15 December"
-        r'(\d+\s+(?:जनवरी|January))',  # "20 जनवरी" or "20 January"
-        
-      """   # Relative dates
-        r'(आज|कल|परसों)',  # today, tomorrow, day after tomorrow
-        r'(tomorrow|today|day\s+after\s+tomorrow)',
-        r'(next\s+(?:Monday|Tuesday|Wednesday|Thursday|Friday|Saturday|Sunday))',
-        r'(अगले\s+(?:सोमवार|मंगलवार|बुधवार|गुरुवार|शुक्रवार|शनिवार|रविवार))', """
-        
-      """   # Week references with dates
-        r'(इस\s+हफ्ते\s+\d{1,2})',  # "इस हफ्ते 15"
-        r'(अगले\s+हफ्ते\s+\d{1,2})',  # "अगले हफ्ते 20" """
+        # Month Day format
+        r'((?:जनवरी|फरवरी|मार्च|अप्रैल|मई|जून|जुलाई|अगस्त|सितंबर|अक्टूबर|नवंबर|दिसंबर)\s+\d{1,2})',
+        r'((?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2})',
     ]
 
     # Enhanced time patterns
     time_patterns = [
-        # Specific times
-        r'(\d{1,2}:\d{2}\s*(?:AM|PM|am|pm))',  # 10:30 AM
-        r'(\d{1,2}:\d{2})',  # 10:30 (24-hour format)
-        r'(\d{1,2}\s*(?:AM|PM|am|pm))',  # 10 AM
-        r'(\d{1,2}\s*बजे)',  # 10 बजे
-        r'(\d{1,2}\s*(?:बजकर)\s*\d{1,2}\s*(?:मिनट))',  # 10 बजकर 30 मिनट
+        # Specific times with बजे
+        r'(\d{1,2}\s*बजे)',  # "3 बजे", "10 बजे"
+        r'(\d{1,2}:\d{2}\s*(?:AM|PM|am|pm|बजे))',  # "10:30 AM", "3:00 बजे"
+        r'(\d{1,2}:\d{2})',  # "10:30" (24-hour format)
+        r'(\d{1,2}\s*(?:AM|PM|am|pm))',  # "10 AM"
+        r'(\d{1,2}\s*(?:बजकर)\s*\d{1,2}\s*(?:मिनट))',  # "10 बजकर 30 मिनट"
         
         # Time periods
         r'(morning|सुबह)',
-        r'(afternoon|दोपहर)',
+        r'(afternoon|दोपहर)', 
         r'(evening|शाम)',
-        r'(night|रात)',
         
         # Specific time slots mentioned by AI
-        r'(10\s*(?:बजे|AM|am)\s*से\s*12\s*(?:बजे|PM|pm))',  # 10 AM to 12 PM
-        r'(2\s*(?:बजे|PM|pm)\s*से\s*4\s*(?:बजे|PM|pm))',   # 2 PM to 4 PM
-        r'(5\s*(?:बजे|PM|pm)\s*से\s*7\s*(?:बजे|PM|pm))',   # 5 PM to 7 PM
+        r'(10\s*(?:बजे|AM|am)\s*से\s*12\s*(?:बजे|PM|pm))',
+        r'(2\s*(?:बजे|PM|pm)\s*से\s*4\s*(?:बजे|PM|pm))',
+        r'(5\s*(?:बजे|PM|pm)\s*से\s*7\s*(?:बजे|PM|pm))',
     ]
 
     # Extract date information
@@ -219,20 +210,28 @@ def extract_appointment_details():
         matches = re.findall(pattern, full_conversation, re.IGNORECASE)
         if matches:
             raw_date = matches[0]
+            print(f"📅 Found raw date: '{raw_date}'")
             break
 
-    # Normalize the extracted date using our helper function
+    # Normalize the extracted date
     if raw_date:
-        normalized_date = normalize_date(raw_date)
+        normalized_date = normalize_date_enhanced(raw_date)
         extracted_info["appointment_date"] = normalized_date
         print(f"📅 Raw date: '{raw_date}' → Normalized: '{normalized_date}'")
 
     # Extract time information
+    raw_time = None
     for pattern in time_patterns:
         matches = re.findall(pattern, full_conversation, re.IGNORECASE)
         if matches:
-            extracted_info["appointment_time"] = matches[0]
+            raw_time = matches[0]
+            print(f"⏰ Found raw time: '{raw_time}'")
             break
+
+    if raw_time:
+        normalized_time = normalize_time_enhanced(raw_time)
+        extracted_info["appointment_time"] = normalized_time
+        print(f"⏰ Raw time: '{raw_time}' → Normalized: '{normalized_time}'")
 
     # Determine time slot based on conversation
     conversation_lower = full_conversation.lower()
@@ -245,7 +244,7 @@ def extract_appointment_details():
 
     # Enhanced confirmation keywords
     confirmation_keywords = [
-        "slot book कर लिया",
+        "slot.*(?:reserve|book).*कर.*रही.*हूँ",
         "बुक कर दिया है",
         "अपॉइंटमेंट.*बुक.*है",
         "आपका अपॉइंटमेंट.*फिक्स",
@@ -255,68 +254,194 @@ def extract_appointment_details():
         "calendar.*में.*slot.*book",
         "आपके.*लिए.*slot.*book",
         "appointment.*confirm",
-        "booking.*confirm"
+        "booking.*confirm",
+        "slot.*confirm"
     ]
     
     extracted_info["appointment_confirmed"] = any(
         re.search(keyword, full_conversation, re.IGNORECASE) for keyword in confirmation_keywords
     )
 
+    print(f"🔍 Final extracted info: {extracted_info}")
     return extracted_info
 
 
-# Additional helper function to parse and normalize dates
-def normalize_date(date_string):
-    """Convert various date formats to a standard format"""
+def normalize_date_enhanced(date_string):
+    """Enhanced date normalization focusing on specific dates only"""
     if not date_string:
         return None
-    
-    from datetime import datetime, timedelta
-    import calendar
     
     date_lower = date_string.lower().strip()
     today = datetime.now()
     
-    # Handle relative dates
-    if date_lower in ['आज', 'today']:
-        return today.strftime('%d-%m-%Y')
-    elif date_lower in ['कल', 'tomorrow']:
-        return (today + timedelta(days=1)).strftime('%d-%m-%Y')
-    elif date_lower in ['परसों', 'day after tomorrow']:
-        return (today + timedelta(days=2)).strftime('%d-%m-%Y')
+    print(f"🔄 Normalizing date: '{date_string}'")
     
-    # Handle month names conversion
-    month_mapping = {
-        'january': '01', 'jan': '01', 'जनवरी': '01',
-        'february': '02', 'feb': '02', 'फरवरी': '02',
-        'march': '03', 'mar': '03', 'मार्च': '03',
-        'april': '04', 'apr': '04', 'अप्रैल': '04',
-        'may': '05', 'मई': '05',
-        'june': '06', 'jun': '06', 'जून': '06',
-        'july': '07', 'jul': '07', 'जुलाई': '07',
-        'august': '08', 'aug': '08', 'अगस्त': '08',
-        'september': '09', 'sep': '09', 'सितंबर': '09',
-        'october': '10', 'oct': '10', 'अक्टूबर': '10',
-        'november': '11', 'nov': '11', 'नवंबर': '11',
-        'december': '12', 'dec': '12', 'दिसंबर': '12', 'दिसम्बर': '12'
+    # Hindi month mapping
+    hindi_months = {
+        'जनवरी': '01', 'फरवरी': '02', 'मार्च': '03', 'अप्रैल': '04',
+        'मई': '05', 'जून': '06', 'जुलाई': '07', 'अगस्त': '08',
+        'सितंबर': '09', 'अक्टूबर': '10', 'नवंबर': '11', 'दिसंबर': '12'
     }
     
-    # Try to parse date with month names
-    for month_name, month_num in month_mapping.items():
-        if month_name in date_lower:
-            # Extract day and year if present
-            import re
-            day_match = re.search(r'(\d{1,2})', date_string)
-            year_match = re.search(r'(\d{4})', date_string)
-            
-            if day_match:
-                day = day_match.group(1).zfill(2)
-                year = year_match.group(1) if year_match else str(today.year)
-                return f"{day}-{month_num}-{year}"
+    # English month mapping
+    english_months = {
+        'january': '01', 'jan': '01', 'february': '02', 'feb': '02',
+        'march': '03', 'mar': '03', 'april': '04', 'apr': '04',
+        'may': '05', 'june': '06', 'jun': '06', 'july': '07', 'jul': '07',
+        'august': '08', 'aug': '08', 'september': '09', 'sep': '09',
+        'october': '10', 'oct': '10', 'november': '11', 'nov': '11',
+        'december': '12', 'dec': '12'
+    }
     
-    # Return original if no parsing successful
-    return date_string
+    # Combine all month mappings
+    all_months = {**hindi_months, **english_months}
+    
+    # Extract day and month from patterns like "5 जुलाई" or "15 July"
+    day_month_pattern = r'(\d{1,2})\s+([a-zA-Zा-ी]+)'
+    month_day_pattern = r'([a-zA-Zा-ी]+)\s+(\d{1,2})'
+    
+    # Try day-month pattern first (most common)
+    match = re.search(day_month_pattern, date_string, re.IGNORECASE)
+    if match:
+        day = match.group(1).zfill(2)
+        month_name = match.group(2).lower()
+        
+        if month_name in all_months:
+            month = all_months[month_name]
+            year = str(today.year)
+            
+            # If the date has passed this year, assume next year
+            try:
+                proposed_date = datetime(int(year), int(month), int(day))
+                if proposed_date < today:
+                    year = str(today.year + 1)
+            except:
+                pass
+            
+            result = f"{day}-{month}-{year}"
+            print(f"✅ Day-Month pattern matched: {day}/{month}/{year} → {result}")
+            return result
+    
+    # Try month-day pattern
+    match = re.search(month_day_pattern, date_string, re.IGNORECASE)
+    if match:
+        month_name = match.group(1).lower()
+        day = match.group(2).zfill(2)
+        
+        if month_name in all_months:
+            month = all_months[month_name]
+            year = str(today.year)
+            
+            # If the date has passed this year, assume next year
+            try:
+                proposed_date = datetime(int(year), int(month), int(day))
+                if proposed_date < today:
+                    year = str(today.year + 1)
+            except:
+                pass
+            
+            result = f"{day}-{month}-{year}"
+            print(f"✅ Month-Day pattern matched: {day}/{month}/{year} → {result}")
+            return result
+    
+    # Handle "X तारीख" format
+    if 'तारीख' in date_string:
+        day_match = re.search(r'(\d{1,2})', date_string)
+        if day_match:
+            day = day_match.group(1).zfill(2)
+            # Use current month and year
+            month = str(today.month).zfill(2)
+            year = str(today.year)
+            result = f"{day}-{month}-{year}"
+            print(f"✅ तारीख pattern matched: {result}")
+            return result
+    
+    # Handle standard date formats
+    date_formats = [
+        r'(\d{1,2})[-/](\d{1,2})[-/](\d{4})',  # DD-MM-YYYY
+        r'(\d{4})[-/](\d{1,2})[-/](\d{1,2})',  # YYYY-MM-DD
+        r'(\d{1,2})[-/](\d{1,2})[-/](\d{2})',  # DD-MM-YY
+    ]
+    
+    for pattern in date_formats:
+        match = re.search(pattern, date_string)
+        if match:
+            if len(match.group(1)) == 4:  # YYYY-MM-DD
+                year, month, day = match.groups()
+            elif len(match.group(3)) == 4:  # DD-MM-YYYY
+                day, month, year = match.groups()
+            else:  # DD-MM-YY
+                day, month, year = match.groups()
+                year = f"20{year}" if int(year) < 50 else f"19{year}"
+            
+            result = f"{day.zfill(2)}-{month.zfill(2)}-{year}"
+            print(f"✅ Standard date format matched: {result}")
+            return result
+    
+    print(f"❌ Could not normalize date: '{date_string}'")
+    return date_string  # Return original if no parsing successful
 
+
+def normalize_time_enhanced(time_string):
+    """Enhanced time normalization"""
+    if not time_string:
+        return None
+    
+    time_lower = time_string.lower().strip()
+    print(f"🔄 Normalizing time: '{time_string}'")
+    
+    # Handle "X बजे" format
+    baje_match = re.search(r'(\d{1,2})\s*बजे', time_string, re.IGNORECASE)
+    if baje_match:
+        hour = int(baje_match.group(1))
+        # Convert to 24-hour format for afternoon times
+        if hour <= 12 and hour >= 1:
+            if hour == 12:
+                result = "12:00"
+            elif hour < 8:  # Assume afternoon for times 1-7
+                result = f"{hour + 12}:00"
+            else:  # Morning times 8-11
+                result = f"{hour:02d}:00"
+        else:
+            result = f"{hour:02d}:00"
+        
+        print(f"✅ बजे pattern matched: {result}")
+        return result
+    
+    # Handle HH:MM format
+    time_match = re.search(r'(\d{1,2}):(\d{2})', time_string)
+    if time_match:
+        hour = time_match.group(1).zfill(2)
+        minute = time_match.group(2)
+        result = f"{hour}:{minute}"
+        print(f"✅ HH:MM pattern matched: {result}")
+        return result
+    
+    # Handle AM/PM format
+    ampm_match = re.search(r'(\d{1,2})\s*(AM|PM|am|pm)', time_string, re.IGNORECASE)
+    if ampm_match:
+        hour = int(ampm_match.group(1))
+        period = ampm_match.group(2).upper()
+        
+        if period == 'PM' and hour != 12:
+            hour += 12
+        elif period == 'AM' and hour == 12:
+            hour = 0
+        
+        result = f"{hour:02d}:00"
+        print(f"✅ AM/PM pattern matched: {result}")
+        return result
+    
+    # Handle time periods
+    if any(period in time_lower for period in ['morning', 'सुबह']):
+        return "10:00"
+    elif any(period in time_lower for period in ['afternoon', 'दोपहर']):
+        return "14:00"
+    elif any(period in time_lower for period in ['evening', 'शाम']):
+        return "17:00"
+    
+    print(f"❌ Could not normalize time: '{time_string}'")
+    return time_string  # Return original if no parsing successful
 
 def detect_reschedule_request():
     """Detect if conversation indicates reschedule request"""
@@ -770,7 +895,7 @@ async def process_reschedule_outcome():
 
 async def process_conversation_outcome():
     """Process conversation outcome and save to Google Sheets"""
-    global call_outcome_detected, current_call_uuid
+    global call_outcome_detected, current_call_uuid,appointment_booked_pending_end
 
     # Get current record from enhanced queue manager
     """ current_record = call_queue_manager.get_current_record()
@@ -803,6 +928,10 @@ async def process_conversation_outcome():
             print(f"✅ Appointment booked for {current_record.name} (Row {current_record.row_number})")
             print(f"   Date: {appointment_details.get('appointment_date', 'TBD')}")
             print(f"   Time: {appointment_details.get('appointment_time', 'TBD')}")
+
+            #CRITICAL CHANGE: Mark appointment booked but DON'T move to next record yet
+            call_outcome_detected = CallResult.APPOINTMENT_BOOKED
+            appointment_booked_pending_end = True
 
             # Mark in queue manager
             await call_queue_manager.mark_call_result(
@@ -837,7 +966,7 @@ call_analyzer = CallAnalyzer()
 async def terminate_call_gracefully(websocket, realtime_ai_ws, reason="completed"):
     """Gracefully terminate call and clean up all connections"""
     global current_call_session, current_call_uuid, call_timer_task, call_outcome_detected
-    global media_stream_connected, conversation_active_flag, conversation_count
+    global media_stream_connected, conversation_active_flag, conversation_count,appointment_booked_pending_end
 
     # Reset flags
 
@@ -847,6 +976,7 @@ async def terminate_call_gracefully(websocket, realtime_ai_ws, reason="completed
         media_stream_connected = False
         conversation_active_flag = False
         conversation_count = 0
+
         # Cancel the call timer if it's running
         if call_timer_task and not call_timer_task.done():
             call_timer_task.cancel()
@@ -915,8 +1045,32 @@ async def terminate_call_gracefully(websocket, realtime_ai_ws, reason="completed
         # Handle call outcome with enhanced queue manager
         current_record = call_queue_manager.get_current_record()
         if current_record:
-            if not call_outcome_detected:
-                # Mark as incomplete if no outcome was detected
+            if call_outcome_detected and appointment_booked_pending_end:
+                # Appointment was booked - now that call ended naturally, move to next
+                print(f"✅ Appointment booked call ended naturally - now moving to next record")
+                
+                if call_queue_manager._stop_after_current_call or call_queue_manager._should_stop:
+                    print("🛑 Queue is stopping - not moving to next record")
+                    current_record.status = call_outcome_detected
+                    call_queue_manager._call_in_progress = False
+                else:
+                    await call_queue_manager.move_to_next_record()
+                    
+                appointment_booked_pending_end = False  # Reset flag
+                
+            elif call_outcome_detected and call_outcome_detected == CallResult.RESCHEDULE_REQUESTED:
+                # Reschedule was requested - move to next
+                print(f"✅ Reschedule request call ended naturally - now moving to next record")
+                
+                if call_queue_manager._stop_after_current_call or call_queue_manager._should_stop:
+                    print("🛑 Queue is stopping - not moving to next record")
+                    current_record.status = call_outcome_detected
+                    call_queue_manager._call_in_progress = False
+                else:
+                    await call_queue_manager.move_to_next_record()
+                    
+            elif not call_outcome_detected:
+                # No outcome was detected - mark as incomplete
                 call_duration = calculate_call_duration()
                 if call_duration >= MAX_CALL_DURATION:
                     reason_detail = "call_timeout"
@@ -937,16 +1091,6 @@ async def terminate_call_gracefully(websocket, realtime_ai_ws, reason="completed
                     'gender': current_record.gender
                 }
                 await append_incomplete_call_to_sheets(patient_record, reason_detail)
-            else:
-                # Call had a successful outcome
-                print(f"✅ Call completed successfully with outcome detected")
-
-                if call_queue_manager._stop_after_current_call or call_queue_manager._should_stop:
-                    print("🛑 Queue is stopping - not moving to next record")
-                    current_record.status = call_outcome_detected
-                    call_queue_manager._call_in_progress = False
-                else:
-                    await call_queue_manager.move_to_next_record()
 
         # Reset global flags
         current_call_session = None
@@ -956,9 +1100,9 @@ async def terminate_call_gracefully(websocket, realtime_ai_ws, reason="completed
 
         # Reset queue manager state
         call_queue_manager._call_in_progress = False
-        call_queue_manager.records = []
+        """ call_queue_manager.records = []
         call_queue_manager.current_index = 0
-        call_queue_manager.total_records = 0
+        call_queue_manager.total_records = 0 """
 
         # Clear single call patient info
         global single_call_patient_info
@@ -1990,9 +2134,13 @@ async def handle_media_stream(websocket: WebSocket):
 
                             # Check for appointment confirmation triggers
                             appointment_triggers = [
-                                """ 'slot reserve कर रही हूँ', """
-                                'आप नहीं आ पाएं, तो please एक WhatsApp message कर दीजिए।'
+                               # Slot booking variations
+                                r'(slot|स्लॉट).*(reserve|book|confirm|बुक|रिज़र्व|कन्फर्म).*(कर रही हूँ|कर दिया|हो गया)',
+                                
+                                # Appointment confirmation variations
+                                r'(appointment|अपॉइंटमेंट).*(book|confirm|fix|बुक|कन्फर्म|फिक्स).*(कर रही हूँ|कर दिया|हो गया)'
                             ]
+
 
                             # Enhanced trigger handling in media stream
                             if any(re.search(trigger, transcript, re.IGNORECASE) for trigger in appointment_triggers):
@@ -2179,6 +2327,7 @@ CONVERSATION FLOW:
 
 OPENING:
 "नमस्ते {greeting_name}, मैं Ritika बोल रही हूँ Aveya IVF – Rajouri Garden से। आप कैसे हैं आज?"
+(रुकें, जवाब का इंतज़ार करें और जवाब acknowledge करें)
 "अच्छा सुनकर अच्छा लगा "
 "हमें हाल ही में एक फॉर्म मिला था – जिसमें fertility को लेकर थोड़ी clarity माँगी गई थी। शायद आपने या आपके किसी family member ने भरा हो। क्या आपको थोड़ा याद आ रहा है?"
 
@@ -2199,6 +2348,7 @@ OFFER EXPLANATION:
 SLOT_SUGGESTION =
 "अगर आपको लगे कि ये session helpful हो सकता है, तो मैं एक छोटा सा slot block कर देती हूँ।"
 "आपके लिए कौन सी date convenient रहेगी?"
+(जवाब सुनें और acknowledge करें)
 "Perfect! और उस दिन कौन सा time better रहेगा – morning, afternoon या evening?"
 "Morning में 10 बजे से 12 बजे तक available है, afternoon में 2 बजे से 4 बजे तक, और evening में 5 बजे से 7 बजे तक। कौन सा slot आपके लिए convenient है?"
 

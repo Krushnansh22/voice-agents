@@ -238,7 +238,7 @@ Please analyze this call transcript and respond with EXACTLY this JSON format (n
 
 {{
     "call_outcome": "one of: Appointment Booked, Reschedule Requested, Call Incomplete, Not Interested, Follow Up Needed",
-    "Summary": "comprehensive summary of what happened in the call"
+    "Summary": "comprehensive detailed summary of what happened in the call"
 }}
 
 Guidelines for call_outcome:
