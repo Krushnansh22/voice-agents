@@ -19,6 +19,7 @@ from settings import settings
 import uvicorn
 import warnings
 import openpyxl
+
 from openpyxl import Workbook
 import os
 from datetime import datetime, timedelta
@@ -44,6 +45,7 @@ from dotenv import load_dotenv
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
 load_dotenv()
 
 # Call management variables
@@ -108,7 +110,6 @@ class GoogleSheetConnectionRequest(BaseModel):
     sheet_id: str
     worksheet_name: Optional[str] = "Records"
 
-
 class CallHangupManager:
     """Manages automatic call hangup after successful outcomes"""
 
@@ -127,6 +128,7 @@ class CallHangupManager:
         self.pending_hangups.add(call_uuid)
         logger.info(f"🔚 Scheduling hangup for call {call_uuid} in {self.delay_seconds}s - Reason: {reason}")
 
+        # Wait for delay to let AI finish speaking
         await asyncio.sleep(self.delay_seconds)
 
         try:
@@ -167,6 +169,7 @@ def extract_appointment_details():
         "raw_conversation": full_conversation,
         "appointment_confirmed": False
     }
+
 
     # Enhanced date patterns - focusing on specific dates/months only
     date_patterns = [
@@ -565,7 +568,6 @@ def extract_reschedule_details():
         if re.search(pattern, full_conversation, re.IGNORECASE):
             callback_info["callback_day"] = normalized_day
             break
-
     # Extract period
     period_patterns = [
         (r'(सुबह|morning)', 'Morning'),
@@ -573,7 +575,6 @@ def extract_reschedule_details():
         (r'(शाम|evening)', 'Evening'),
         (r'(रात|night)', 'Night'),
     ]
-
     for pattern, normalized_period in period_patterns:
         if re.search(pattern, full_conversation, re.IGNORECASE):
             callback_info["callback_period"] = normalized_period
@@ -1814,6 +1815,269 @@ async def queue_status_websocket(websocket: WebSocket):
         logger.error(f"Queue status WebSocket error: {e}")
 
 
+
+@app.get("/dashboard", response_class=HTMLResponse)
+async def dashboard():
+    """Serve the transcript dashboard"""
+    with open("transcript_dashboard.html", "r", encoding="utf-8") as file:
+        return HTMLResponse(content=file.read())
+
+
+# NEW: Queue Control API Endpoints
+@app.post("/api/upload-records")
+async def upload_patient_records(file: UploadFile = File(...)):
+    """Upload Excel file with patient records"""
+    try:
+        # Validate file type
+        if not file.filename.endswith(('.xlsx', '.xls')):
+            raise HTTPException(status_code=400, detail="Only Excel files (.xlsx, .xls) are supported")
+
+        # Read file content
+        file_content = await file.read()
+
+        if len(file_content) == 0:
+            raise HTTPException(status_code=400, detail="Empty file uploaded")
+
+        # Process with CallQueueManager
+        result = await call_queue_manager.upload_records(file_content, file.filename)
+
+        if result["success"]:
+            logger.info(f"Successfully uploaded {result['total_records']} records from {file.filename}")
+            return {
+                "success": True,
+                "message": f"Successfully uploaded {result['total_records']} records",
+                "data": result
+            }
+        else:
+            raise HTTPException(status_code=400, detail=result["error"])
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to upload records: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to process file: {str(e)}")
+
+
+@app.post("/api/queue/start")
+async def start_call_queue():
+    """Start the calling queue"""
+    try:
+        result = await call_queue_manager.start_queue()
+
+        if result["success"]:
+            return {
+                "success": True,
+                "message": "Call queue started successfully",
+                "data": result
+            }
+        else:
+            raise HTTPException(status_code=400, detail=result["error"])
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to start queue: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/queue/pause")
+async def pause_call_queue():
+    """Pause the calling queue"""
+    try:
+        result = await call_queue_manager.pause_queue()
+
+        if result["success"]:
+            return {
+                "success": True,
+                "message": "Call queue paused",
+                "data": {"status": result["status"]}
+            }
+        else:
+            raise HTTPException(status_code=400, detail=result["error"])
+
+    except Exception as e:
+        logger.error(f"Failed to pause queue: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/queue/resume")
+async def resume_call_queue():
+    """Resume the paused calling queue"""
+    try:
+        result = await call_queue_manager.resume_queue()
+
+        if result["success"]:
+            return {
+                "success": True,
+                "message": "Call queue resumed",
+                "data": {"status": result["status"]}
+            }
+        else:
+            raise HTTPException(status_code=400, detail=result["error"])
+
+    except Exception as e:
+        logger.error(f"Failed to resume queue: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/queue/stop")
+async def stop_call_queue():
+    """Stop the calling queue"""
+    try:
+        result = await call_queue_manager.stop_queue()
+
+        return {
+            "success": True,
+            "message": "Call queue stopped",
+            "data": result
+        }
+
+    except Exception as e:
+        logger.error(f"Failed to stop queue: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/queue/reset")
+async def reset_call_queue():
+    """Reset the calling queue to start from beginning"""
+    try:
+        result = await call_queue_manager.reset_queue()
+
+        if result["success"]:
+            return {
+                "success": True,
+                "message": "Call queue reset successfully",
+                "data": result
+            }
+        else:
+            raise HTTPException(status_code=400, detail=result["error"])
+
+    except Exception as e:
+        logger.error(f"Failed to reset queue: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/api/queue/skip-current")
+async def skip_current_call():
+    """Skip the current call and move to next"""
+    try:
+        result = await call_queue_manager.skip_current_call()
+
+        if result["success"]:
+            return {
+                "success": True,
+                "message": "Current call skipped",
+                "data": result
+            }
+        else:
+            raise HTTPException(status_code=400, detail=result["error"])
+
+    except Exception as e:
+        logger.error(f"Failed to skip current call: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/queue/status")
+async def get_queue_status():
+    """Get current queue status and statistics"""
+    try:
+        status = call_queue_manager.get_status()
+        return JSONResponse(content=status)
+
+    except Exception as e:
+        logger.error(f"Failed to get queue status: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.websocket("/ws/transcripts")
+async def websocket_endpoint(websocket: WebSocket):
+    """WebSocket endpoint for real-time transcript updates"""
+    await websocket_manager.connect(websocket)
+    try:
+        # Send initial connection confirmation
+        await websocket.send_text(json.dumps({
+            "type": "connection_status",
+            "status": "connected",
+            "timestamp": datetime.utcnow().isoformat()
+        }))
+
+        while True:
+            try:
+                # Set a timeout to prevent indefinite blocking
+                message = await asyncio.wait_for(
+                    websocket.receive_text(),
+                    timeout=30.0
+                )
+
+                # Parse and handle incoming messages
+                try:
+                    data = json.loads(message)
+
+                    # Handle ping messages
+                    if data.get("type") == "ping":
+                        await websocket.send_text(json.dumps({
+                            "type": "pong",
+                            "timestamp": datetime.utcnow().isoformat()
+                        }))
+
+                    # Handle other message types as needed
+                    print(f"Received from dashboard: {data}")
+
+                except json.JSONDecodeError:
+                    print(f"Invalid JSON received: {message}")
+
+            except asyncio.TimeoutError:
+                # Send keepalive ping
+                try:
+                    await websocket.send_text(json.dumps({
+                        "type": "keepalive",
+                        "timestamp": datetime.utcnow().isoformat()
+                    }))
+                except:
+                    break  # Connection is broken
+
+    except WebSocketDisconnect:
+        print("📞 Client disconnected from WebSocket")
+
+        # Check if call had an outcome or was incomplete
+        global call_outcome_detected
+
+        if not call_outcome_detected:
+            print("⚠️ Call disconnected without clear outcome")
+
+        print("🔄 WebSocket disconnect handled")
+    except Exception as e:
+        print(f"WebSocket error: {e}")
+    finally:
+        websocket_manager.disconnect(websocket)
+
+
+# NEW: WebSocket for queue status updates
+@app.websocket("/ws/queue-status")
+async def queue_status_websocket(websocket: WebSocket):
+    """WebSocket endpoint for real-time queue status updates"""
+    await websocket.accept()
+
+    try:
+        while True:
+            # Send current status every 2 seconds
+            status = call_queue_manager.get_status()
+            await websocket.send_json(status)
+            await asyncio.sleep(2)
+
+    except WebSocketDisconnect:
+        logger.info("Queue status WebSocket disconnected")
+    except Exception as e:
+        logger.error(f"Queue status WebSocket error: {e}")
+
+
+@app.get("/appointment-details")
+async def get_appointment_details():
+    """API endpoint to get extracted appointment details"""
+    details = extract_appointment_details()
+    return JSONResponse(details)
+
+# Replace your existing webhook_handler function with this updated version
 @app.api_route("/webhook", methods=["GET", "POST"])
 async def webhook_handler(request: Request):
     """FIXED webhook handler for both queue and single calls"""
@@ -1956,7 +2220,6 @@ async def webhook_handler(request: Request):
         </Response>
         '''
         return HTMLResponse(content=xml_data, media_type="application/xml")
-
 @app.get("/status")
 async def get_status():
     """Get current system status"""
@@ -1991,7 +2254,6 @@ async def get_call_transcripts(call_id: str):
         return [transcript_entry_to_dict(transcript) for transcript in transcripts]
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
-
 
 @app.post("/api/single-call")
 async def initiate_single_call(
@@ -2131,7 +2393,6 @@ async def get_single_call_status():
     """Get status of current single call"""
     try:
         current_record = call_queue_manager.get_current_record()
-
         if not current_record:
             return {
                 "status": "no_active_call",
@@ -2594,6 +2855,7 @@ async def handle_unexpected_disconnection():
 
     except Exception as e:
         print(f"❌ Error handling unexpected disconnection: {e}")
+
 
 
 async def send_initial_conversation_item(realtime_ai_ws, user_details=None):

@@ -33,6 +33,7 @@ class CallResult(Enum):
 
 class CallRecord:
     def __init__(self, index: int, name: str, phone: str, address: str, age: str, gender: str, row_number: int = None):
+
         self.index = index
         self.name = name
         self.phone = phone
@@ -168,6 +169,7 @@ class EnhancedCallQueueManager:
 
             logger.info(f"Successfully loaded {self.total_records} records from Google Sheets")
 
+
             return {
                 "success": True,
                 "total_records": self.total_records,
@@ -299,6 +301,7 @@ class EnhancedCallQueueManager:
         if self.status == QueueStatus.RUNNING:
             self.status = QueueStatus.PAUSED
             logger.info("Queue paused (monitoring continues)")
+
             return {"success": True, "status": self.status.value}
 
         return {"success": False, "error": f"Cannot pause queue in {self.status.value} state"}
@@ -397,6 +400,7 @@ class EnhancedCallQueueManager:
             self.status = QueueStatus.IDLE
             self._call_in_progress = False
             self._stop_after_current_call = False
+
 
             # Reset stats
             self.stats = {
@@ -747,6 +751,7 @@ class EnhancedCallQueueManager:
                                 logger.info(f"🛑 Stop requested during call to {current_record.name}")
                                 break
 
+
                         self._call_in_progress = False
 
                         if call_timeout >= max_call_duration and current_record.status == CallResult.CALLING:
@@ -754,6 +759,7 @@ class EnhancedCallQueueManager:
                             await self.mark_call_result(CallResult.CALL_FAILED, "Call timeout - exceeded maximum duration")
                             await self.move_to_next_record()
 
+                        # Check if we should stop after this call
                         if self._stop_after_current_call:
                             logger.info(f"🛑 Stopping queue after completing call to {current_record.name}")
                             break
