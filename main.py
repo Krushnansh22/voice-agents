@@ -48,12 +48,13 @@ load_dotenv()
 
 # Call management variables
 MAX_CALL_DURATION = 300  # 5 minutes in seconds
-call_timer_task = None
 call_uuid_storage = {}
 current_call_uuid = None
 
 # Global variables for call tracking
+call_timer_task = None
 call_start_time = None
+call_timer_active = False
 call_outcome_detected = False
 
 app = FastAPI()
@@ -65,6 +66,9 @@ conversation_count = 0
 
 # Global variable to store conversation transcripts
 conversation_transcript = []
+
+call_terminated_gracefully = False
+connection_closed_unexpectedly = False
 
 # Global variable to store current call session
 current_call_session = None
@@ -545,7 +549,7 @@ def extract_reschedule_details():
 
     # Normalize the date if found
     if raw_date:
-        normalized_date = normalize_date(raw_date)
+        normalized_date = normalize_date_enhanced(raw_date)
         callback_info["normalized_callback_date"] = normalized_date
         print(f"📅 Reschedule date: '{raw_date}' → Normalized: '{normalized_date}'")
 
@@ -705,23 +709,18 @@ def should_terminate_call(transcript):
     return False, None
 
 
-def calculate_call_duration():
-    """Calculate call duration in seconds"""
-    global call_start_time
-    if call_start_time:
-        return int(time.time() - call_start_time)
-    return 0
 
 
 # Google Sheets Integration Functions
-async def append_appointment_to_sheets(appointment_details, patient_record):
-    """Append appointment details to Google Sheets"""
+async def append_appointment_to_sheets(appointment_details, patient_record, ai_summary=""):
+    """Append appointment details to Google Sheets with AI summary"""
     try:
-        success = await google_sheets_service.append_appointment(appointment_details, patient_record)
+        success = await google_sheets_service.append_appointment(appointment_details, patient_record, ai_summary)
 
         if success:
             print(f"✅ Appointment details saved to Google Sheets for {patient_record.get('name', 'Unknown')}")
             print(f"👩‍⚕ Doctor assigned: {appointment_details.get('doctor_name', 'डॉ. निशा')}")
+            print(f"📝 AI Summary: {ai_summary[:100]}...")
             return True
         else:
             print(f"❌ Failed to save appointment details to Google Sheets")
@@ -894,21 +893,15 @@ async def process_reschedule_outcome():
 
 
 async def process_conversation_outcome():
-    """Process conversation outcome and save to Google Sheets"""
-    global call_outcome_detected, current_call_uuid,appointment_booked_pending_end
-
-    # Get current record from enhanced queue manager
-    """ current_record = call_queue_manager.get_current_record()
-    if not current_record:
-        print(f"❌ No current record available for outcome processing")
-        return """
+    """Process conversation outcome and save to Google Sheets with AI summary"""
+    global call_outcome_detected, current_call_uuid, appointment_booked_pending_end
 
     if single_call_patient_info:
         # Use single call patient info
         current_record = single_call_patient_info.copy()
         logger.info(f"📞 Using single call patient info: {current_record['name']}")
     else:
-         # Get current record from queue manager (existing logic)
+        # Get current record from queue manager (existing logic)
         current_record = call_queue_manager.get_current_record()
 
     # Convert CallRecord to dict format for Google Sheets functions
@@ -923,13 +916,37 @@ async def process_conversation_outcome():
     # Check for appointment booking first
     appointment_details = extract_appointment_details()
     if appointment_details.get("appointment_confirmed"):
-        success = await append_appointment_to_sheets(appointment_details, patient_record)
+
+        # ADDED: Generate AI summary for appointment
+        ai_summary = ""
+        try:
+            # Get conversation transcript for summary
+            full_conversation = " ".join(conversation_transcript)
+            if full_conversation and len(full_conversation.strip()) > 10:
+                # Use call analyzer to generate summary
+                ai_summary = await call_analyzer.generate_ai_summary(
+                    full_conversation,
+                    current_record.name
+                )
+                # Parse the summary from Gemini response
+                parsed_result = call_analyzer.parse_gemini_response(ai_summary)
+                ai_summary = parsed_result.get('summary', 'Appointment booked successfully')
+            else:
+                ai_summary = "Appointment booked successfully"
+        except Exception as e:
+            logger.warning(f"⚠️ Could not generate AI summary: {e}")
+            ai_summary = "Appointment booked successfully"
+
+        # UPDATED: Pass AI summary to append_appointment
+        success = await append_appointment_to_sheets(appointment_details, patient_record, ai_summary)
+
         if success:
             print(f"✅ Appointment booked for {current_record.name} (Row {current_record.row_number})")
             print(f"   Date: {appointment_details.get('appointment_date', 'TBD')}")
             print(f"   Time: {appointment_details.get('appointment_time', 'TBD')}")
+            print(f"   Summary: {ai_summary[:100]}...")
 
-            #CRITICAL CHANGE: Mark appointment booked but DON'T move to next record yet
+            # CRITICAL CHANGE: Mark appointment booked but DON'T move to next record yet
             call_outcome_detected = CallResult.APPOINTMENT_BOOKED
             appointment_booked_pending_end = True
 
@@ -960,16 +977,186 @@ async def process_conversation_outcome():
 
     print(f"ℹ️ No clear outcome detected yet for {current_record.name} (Row {current_record.row_number})")
 
+
 call_analyzer = CallAnalyzer()
+
+
+async def handle_incomplete_call_with_analysis(current_record, reason):
+    """Handle incomplete call with AI analysis for summary and intent"""
+    try:
+        print(f"📝 Processing incomplete call with AI analysis for {current_record.name}")
+
+        # Calculate call duration
+        call_duration = calculate_call_duration()
+
+        # Determine reason details
+        if call_duration >= MAX_CALL_DURATION:
+            reason_detail = "call_timeout"
+        elif len(conversation_transcript) < 3:
+            reason_detail = "minimal_interaction"
+        else:
+            reason_detail = "call_incomplete"
+
+        # Generate AI summary and intent if we have conversation
+        ai_summary = ""
+        customer_intent = "neutral"
+
+        if conversation_transcript and len(conversation_transcript) > 0:
+            full_conversation = " ".join(conversation_transcript)
+
+            # Generate AI analysis
+            try:
+                analysis_result = await generate_incomplete_call_analysis(
+                    full_conversation,
+                    current_record.name,
+                    reason_detail
+                )
+                ai_summary = analysis_result.get('summary', 'Call ended without clear outcome')
+                customer_intent = analysis_result.get('intent', 'neutral')
+
+                print(f"📊 AI Analysis - Summary: {ai_summary[:100]}...")
+                print(f"📊 AI Analysis - Intent: {customer_intent}")
+
+            except Exception as e:
+                print(f"⚠️ Error generating AI analysis: {e}")
+                ai_summary = f"Call ended without clear outcome. Duration: {call_duration}s"
+                customer_intent = "neutral"
+        else:
+            ai_summary = f"No conversation detected. Call duration: {call_duration}s"
+            customer_intent = "neutral"
+
+        # Complete the call in queue manager
+        await call_queue_manager.complete_current_call(CallResult.CALL_INCOMPLETE, reason_detail)
+
+        # Save to Google Sheets with AI analysis
+        patient_record = {
+            'name': current_record.name,
+            'phone_number': current_record.phone,
+            'address': current_record.address,
+            'age': current_record.age,
+            'gender': current_record.gender
+        }
+
+        # NEW: Use enhanced incomplete call method with AI analysis
+        await append_incomplete_call_with_analysis(
+            patient_record,
+            reason_detail,
+            call_duration,
+            ai_summary,
+            customer_intent
+        )
+
+    except Exception as e:
+        print(f"❌ Error handling incomplete call analysis: {e}")
+
+
+async def generate_incomplete_call_analysis(transcript: str, patient_name: str, reason: str) -> dict:
+    """Generate AI analysis for incomplete calls"""
+    try:
+        prompt = f"""You are analyzing an incomplete call transcript from an IVF clinic. The patient's name is {patient_name}.
+The call ended as: {reason}
+
+Please analyze this incomplete call transcript and respond with EXACTLY this JSON format:
+
+{{
+    "summary": "brief summary of what was discussed before call ended",
+    "intent": "interested/not_interested/neutral"
+}}
+
+Guidelines for intent:
+- "interested": Patient showed interest in services, asked questions, wanted to know more
+- "not_interested": Patient clearly declined, said not interested, hung up quickly
+- "neutral": Unclear intent, minimal conversation, technical issues, or ambiguous response
+
+For summary, include:
+- What was discussed before call ended
+- Patient's response if any
+- Reason for incompleteness
+
+CALL TRANSCRIPT:
+{transcript}
+
+CALL END REASON: {reason}
+
+Respond with ONLY the JSON format above:"""
+
+        response = await asyncio.to_thread(
+            call_analyzer.gemini_model.generate_content,
+            prompt
+        )
+
+        result = response.text.strip()
+
+        # Parse the response
+        try:
+            # Clean up response
+            clean_response = result.strip()
+            if clean_response.startswith("```json"):
+                clean_response = clean_response[7:]
+            if clean_response.startswith("```"):
+                clean_response = clean_response[3:]
+            if clean_response.endswith("```"):
+                clean_response = clean_response[:-3]
+            clean_response = clean_response.strip()
+
+            parsed = json.loads(clean_response)
+            return {
+                'summary': parsed.get('summary', 'Call ended without clear outcome'),
+                'intent': parsed.get('intent', 'neutral').lower()
+            }
+
+        except json.JSONDecodeError:
+            # Fallback parsing
+            summary_match = re.search(r'"summary"\s*:\s*"([^"]*)"', result, re.IGNORECASE)
+            intent_match = re.search(r'"intent"\s*:\s*"([^"]*)"', result, re.IGNORECASE)
+
+            return {
+                'summary': summary_match.group(1) if summary_match else 'Call ended without clear outcome',
+                'intent': intent_match.group(1).lower() if intent_match else 'neutral'
+            }
+
+    except Exception as e:
+        print(f"❌ Error generating incomplete call analysis: {e}")
+        return {
+            'summary': f'Call ended without clear outcome. Error: {str(e)}',
+            'intent': 'neutral'
+        }
+
+
+async def append_incomplete_call_with_analysis(patient_record: dict, reason: str, call_duration: int, ai_summary: str,
+                                               customer_intent: str):
+    """Append incomplete call with AI analysis to Google Sheets"""
+    try:
+        success = await google_sheets_service.append_incomplete_call(
+            patient_record,
+            reason=reason,
+            call_duration=call_duration,
+            customer_intent_summary=customer_intent,
+            ai_summary=ai_summary  # NEW: Pass AI summary
+        )
+
+        if success:
+            print(f"✅ Incomplete call with AI analysis saved for {patient_record.get('name', 'Unknown')}")
+            print(f"   Summary: {ai_summary[:100]}...")
+            print(f"   Intent: {customer_intent}")
+            return True
+        else:
+            print(f"❌ Failed to save incomplete call with AI analysis")
+            return False
+
+    except Exception as e:
+        print(f"❌ Error saving incomplete call with AI analysis: {e}")
+        return False
 
 
 async def terminate_call_gracefully(websocket, realtime_ai_ws, reason="completed"):
     """Gracefully terminate call and clean up all connections"""
     global current_call_session, current_call_uuid, call_timer_task, call_outcome_detected
-    global media_stream_connected, conversation_active_flag, conversation_count,appointment_booked_pending_end
+    global media_stream_connected, conversation_active_flag, conversation_count, appointment_booked_pending_end
+    global call_terminated_gracefully, call_timer_active, call_start_time  # ADDED timer globals
 
-    # Reset flags
-
+    # Set flag to indicate graceful termination
+    call_terminated_gracefully = True
 
     try:
         print(f"🔚 Terminating call gracefully. Reason: {reason}")
@@ -977,10 +1164,8 @@ async def terminate_call_gracefully(websocket, realtime_ai_ws, reason="completed
         conversation_active_flag = False
         conversation_count = 0
 
-        # Cancel the call timer if it's running
-        if call_timer_task and not call_timer_task.done():
-            call_timer_task.cancel()
-            print("⏰ Call timer cancelled")
+        # UPDATED: Properly stop the call timer
+        await stop_call_timer()
 
         await asyncio.sleep(2)
 
@@ -1026,8 +1211,8 @@ async def terminate_call_gracefully(websocket, realtime_ai_ws, reason="completed
                     "start_time": current_call_session.started_at,
                     "end_time": datetime.utcnow(),
                     "status": reason,
-                    "call_result": call_result,  # From queue manager
-                    "result_details": result_details  # Additional details
+                    "call_result": call_result,
+                    "result_details": result_details
                 }
 
                 # Analyze the call and save to Google Sheets
@@ -1048,77 +1233,61 @@ async def terminate_call_gracefully(websocket, realtime_ai_ws, reason="completed
             if call_outcome_detected and appointment_booked_pending_end:
                 # Appointment was booked - now that call ended naturally, move to next
                 print(f"✅ Appointment booked call ended naturally - now moving to next record")
-                
+
                 if call_queue_manager._stop_after_current_call or call_queue_manager._should_stop:
                     print("🛑 Queue is stopping - not moving to next record")
                     current_record.status = call_outcome_detected
                     call_queue_manager._call_in_progress = False
                 else:
                     await call_queue_manager.move_to_next_record()
-                    
-                appointment_booked_pending_end = False  # Reset flag
-                
+
+                appointment_booked_pending_end = False
+
             elif call_outcome_detected and call_outcome_detected == CallResult.RESCHEDULE_REQUESTED:
                 # Reschedule was requested - move to next
                 print(f"✅ Reschedule request call ended naturally - now moving to next record")
-                
+
                 if call_queue_manager._stop_after_current_call or call_queue_manager._should_stop:
                     print("🛑 Queue is stopping - not moving to next record")
                     current_record.status = call_outcome_detected
                     call_queue_manager._call_in_progress = False
                 else:
                     await call_queue_manager.move_to_next_record()
-                    
+
             elif not call_outcome_detected:
-                # No outcome was detected - mark as incomplete
-                call_duration = calculate_call_duration()
-                if call_duration >= MAX_CALL_DURATION:
-                    reason_detail = "call_timeout"
-                elif len(conversation_transcript) < 3:
-                    reason_detail = "minimal_interaction"
-                else:
-                    reason_detail = "call_incomplete"
+                # No outcome was detected - handle as incomplete call with AI analysis
+                await handle_incomplete_call_with_analysis(current_record, reason)
 
-                # Complete the call in queue manager
-                await call_queue_manager.complete_current_call(CallResult.CALL_INCOMPLETE, reason_detail)
-
-                # Save to Google Sheets
-                patient_record = {
-                    'name': current_record.name,
-                    'phone_number': current_record.phone,
-                    'address': current_record.address,
-                    'age': current_record.age,
-                    'gender': current_record.gender
-                }
-                await append_incomplete_call_to_sheets(patient_record, reason_detail)
-
-        # Reset global flags
+        # Reset global flags - UPDATED to include timer flags
         current_call_session = None
         current_call_uuid = None
         call_outcome_detected = False
         conversation_transcript.clear()
+        call_terminated_gracefully = False
+        call_timer_active = False  # ADDED: Reset timer flag
+        call_start_time = None  # ADDED: Reset start time
 
         # Reset queue manager state
         call_queue_manager._call_in_progress = False
-        """ call_queue_manager.records = []
-        call_queue_manager.current_index = 0
-        call_queue_manager.total_records = 0 """
 
         # Clear single call patient info
         global single_call_patient_info
         single_call_patient_info = None
 
         print(f"🎯 Call termination completed successfully. Reason: {reason}")
+        print(f"🎯 Timer state reset for next call")
 
     except Exception as e:
         print(f"❌ Error during call termination: {e}")
         current_call_session = None
         current_call_uuid = None
         call_outcome_detected = False
+        call_terminated_gracefully = False
+        call_timer_active = False  # ADDED: Reset timer flag on error
+        call_start_time = None  # ADDED: Reset start time on error
 
         if call_queue_manager.get_current_record():
             await call_queue_manager.complete_current_call(CallResult.CALL_FAILED, f"Error: {str(e)}")
-
 
 # Optional: Add an API endpoint to view call analysis data
 @app.get("/api/call-analysis")
@@ -1158,24 +1327,94 @@ async def get_call_analysis():
         logger.error(f"Failed to get call analysis data: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
 async def start_call_timer(websocket, realtime_ai_ws, duration=MAX_CALL_DURATION):
     """Start a timer to automatically terminate the call after specified duration"""
-    global call_timer_task, call_start_time
+    global call_timer_task, call_start_time, call_timer_active
 
     try:
+        # CRITICAL: Cancel any existing timer first
+        if call_timer_task and not call_timer_task.done():
+            print(f"⏰ Cancelling existing timer task before starting new one")
+            call_timer_task.cancel()
+            try:
+                await call_timer_task
+            except asyncio.CancelledError:
+                print(f"✅ Previous timer task cancelled successfully")
+
+        # Reset timer state completely
         call_start_time = time.time()
-        print(f"⏰ Call timer started - will terminate in {duration} seconds")
-        call_timer_task = asyncio.current_task()
+        call_timer_active = True
+
+        print(f"⏰ Starting NEW call timer - will terminate in {duration} seconds")
+        print(f"⏰ Call start time set to: {call_start_time}")
+
+        # Create new timer task
+        call_timer_task = asyncio.create_task(
+            _call_timer_countdown(websocket, realtime_ai_ws, duration)
+        )
+
+        print(f"⏰ New timer task created: {call_timer_task}")
+
+    except Exception as e:
+        print(f"❌ Error starting call timer: {e}")
+        call_timer_active = False
+
+
+async def _call_timer_countdown(websocket, realtime_ai_ws, duration):
+    """Internal countdown function for call timer"""
+    global call_timer_active
+
+    try:
+        print(f"⏰ Timer countdown started for {duration} seconds")
         await asyncio.sleep(duration)
 
-        print(f"⏰ Call duration limit ({duration}s) reached - terminating call")
-        await terminate_call_gracefully(websocket, realtime_ai_ws, "timeout")
+        if call_timer_active:  # Only terminate if timer is still active
+            print(f"⏰ Call duration limit ({duration}s) reached - terminating call")
+            await terminate_call_gracefully(websocket, realtime_ai_ws, "timeout")
+        else:
+            print(f"⏰ Timer expired but was already deactivated")
 
     except asyncio.CancelledError:
         print("⏰ Call timer cancelled - call ended before timeout")
+        call_timer_active = False
     except Exception as e:
-        print(f"❌ Error in call timer: {e}")
+        print(f"❌ Error in call timer countdown: {e}")
+        call_timer_active = False
 
+
+async def stop_call_timer():
+    """Stop and clean up the call timer"""
+    global call_timer_task, call_timer_active, call_start_time
+
+    try:
+        call_timer_active = False
+
+        if call_timer_task and not call_timer_task.done():
+            print(f"⏰ Stopping call timer")
+            call_timer_task.cancel()
+            try:
+                await call_timer_task
+            except asyncio.CancelledError:
+                print("✅ Call timer cancelled successfully")
+
+        # Reset timer variables
+        call_timer_task = None
+        call_start_time = None
+        print(f"⏰ Timer state reset for next call")
+
+    except Exception as e:
+        print(f"❌ Error stopping call timer: {e}")
+
+
+def calculate_call_duration():
+    """Calculate call duration in seconds"""
+    global call_start_time
+    if call_start_time:
+        duration = int(time.time() - call_start_time)
+        print(f"⏱️ Current call duration: {duration} seconds")
+        return duration
+    return 0
 
 # FastAPI Routes
 @app.get("/console", response_class=HTMLResponse)
@@ -1580,7 +1819,7 @@ async def webhook_handler(request: Request):
     """FIXED webhook handler for both queue and single calls"""
     global current_call_uuid,current_record
 
-    if request.method == "POST":
+    if request.method == "POST" :
         print(f"📨 Webhook POST request received!")
 
         # CRITICAL: Check if queue is stopped or stopping (but allow single calls)
@@ -1918,40 +2157,46 @@ async def get_single_call_status():
         logger.error(f"Error getting single call status: {e}")
         raise HTTPException(status_code=500, detail=str(e))
 
+
 @app.websocket("/media-stream")
 async def handle_media_stream(websocket: WebSocket):
-    """Handle WebSocket connections between Plivo and OpenAI"""
+    """Handle WebSocket connections between Plivo and OpenAI with proper timer management"""
     global conversation_transcript, current_call_session, call_start_time, call_outcome_detected
-    global media_stream_connected, conversation_active_flag, conversation_count  # Add these
+    global media_stream_connected, conversation_active_flag, conversation_count
+    global call_terminated_gracefully, connection_closed_unexpectedly
+    global call_timer_task, call_timer_active  # ADDED: Timer globals
 
     await websocket.accept()
 
-    # Set media stream flag when connection is established
+    # Reset ALL flags and state for new call
+    call_terminated_gracefully = False
+    connection_closed_unexpectedly = False
     media_stream_connected = True
     conversation_active_flag = False
     conversation_count = 0
+    call_timer_active = False  # ADDED: Reset timer state
+    call_start_time = None  # ADDED: Reset start time
+
     # Initialize call tracking
-    call_start_time = time.time()
     call_outcome_detected = False
     conversation_transcript = []
 
-    # Get current record from enhanced queue manager
+    print(f"📞 NEW CALL - All state variables reset")
+    print(f"⏰ Timer state reset: call_timer_active={call_timer_active}, call_start_time={call_start_time}")
+
+    # [Existing patient record logic remains the same...]
     current_record = call_queue_manager.get_current_record()
 
-    # Check if this is a single call or queue call
     if single_call_patient_info:
-        # Use single call patient info
         patient_record = single_call_patient_info.copy()
         logger.info(f"📞 Using single call patient info: {patient_record['name']}")
 
-        # Create call session if not already created
         if not current_call_session:
             current_call_session = await db_service.create_call_session(
                 patient_name=patient_record["name"],
                 patient_phone=patient_record["phone_number"]
             )
     else:
-         # Get current record from queue manager (existing logic)
         current_record = call_queue_manager.get_current_record()
         if current_record:
             patient_record = {
@@ -1963,14 +2208,13 @@ async def handle_media_stream(websocket: WebSocket):
             }
         else:
             patient_record = {
-                "name": "Unknown", 
+                "name": "Unknown",
                 "phone_number": "Unknown",
                 "address": "",
                 "age": "",
                 "gender": ""
             }
 
-        # Create new call session in MongoDB for queue calls
         current_call_session = await db_service.create_call_session(
             patient_name=patient_record.get("name", "Unknown"),
             patient_phone=patient_record.get("phone_number", "Unknown")
@@ -1985,260 +2229,371 @@ async def handle_media_stream(websocket: WebSocket):
 
     user_details = None
 
-    async with websockets.connect(
-            OPENAI_API_ENDPOINT,
-            extra_headers={"api-key": OPENAI_API_KEY},
-            ping_timeout=30,
-            close_timeout=15
-    ) as realtime_ai_ws:
+    try:
+        async with websockets.connect(
+                OPENAI_API_ENDPOINT,
+                extra_headers={"api-key": OPENAI_API_KEY},
+                ping_timeout=30,
+                close_timeout=15
+        ) as realtime_ai_ws:
 
-        # Start the call timer
-        call_timer_task = asyncio.create_task(start_call_timer(websocket, realtime_ai_ws))
-        await initialize_session(realtime_ai_ws, user_details)
+            # CRITICAL: Start a FRESH call timer for THIS specific call
+            print(f"⏰ Starting fresh 5-minute timer for this call")
+            await start_call_timer(websocket, realtime_ai_ws)
 
-        # Connection specific state
-        stream_sid = None
-        latest_media_timestamp = 0
-        last_assistant_item = None
-        mark_queue = []
-        response_start_timestamp_twilio = None
+            await initialize_session(realtime_ai_ws, user_details)
 
-        async def receive_from_twilio():
-            """Receive audio data from Twilio and send it to the OpenAI Realtime API"""
-            nonlocal stream_sid, latest_media_timestamp
-            global media_stream_connected  # Add this global
+            # Connection specific state
+            stream_sid = None
+            latest_media_timestamp = 0
+            last_assistant_item = None
+            mark_queue = []
+            response_start_timestamp_twilio = None
 
-            try:
-                async for message in websocket.iter_text():
-                    data = json.loads(message)
-                    if data['event'] == 'media' and realtime_ai_ws.open:
-                        latest_media_timestamp = int(data['media']['timestamp'])
-                        audio_append = {
-                            "type": "input_audio_buffer.append",
-                            "audio": data['media']['payload']
-                        }
-                        await realtime_ai_ws.send(json.dumps(audio_append))
-                    elif data['event'] == 'start':
-                        stream_sid = data['start']['streamId']
-                        print(f"Incoming stream has started {stream_sid}")
+            async def receive_from_twilio():
+                """Receive audio data from Twilio and send it to the OpenAI Realtime API"""
+                nonlocal stream_sid, latest_media_timestamp
+                global media_stream_connected
 
-                        # Set media stream connected flag when stream starts
-                        media_stream_connected = True
-                        print(f"🔗 Media stream connected flag set: {media_stream_connected}")
+                try:
+                    async for message in websocket.iter_text():
+                        data = json.loads(message)
+                        if data['event'] == 'media' and realtime_ai_ws.open:
+                            latest_media_timestamp = int(data['media']['timestamp'])
+                            audio_append = {
+                                "type": "input_audio_buffer.append",
+                                "audio": data['media']['payload']
+                            }
+                            await realtime_ai_ws.send(json.dumps(audio_append))
+                        elif data['event'] == 'start':
+                            stream_sid = data['start']['streamId']
+                            print(f"📞 Incoming stream has started {stream_sid}")
 
-                        await realtime_ai_ws.send(json.dumps(data))
-                        response_start_timestamp_twilio = None
-                        latest_media_timestamp = 0
-                        last_assistant_item = None
-                    elif data['event'] == 'mark':
-                        if mark_queue:
-                            mark_queue.pop(0)
-            except WebSocketDisconnect:
-                print("Client disconnected.")
-            finally:
-                if realtime_ai_ws.open:
-                    await realtime_ai_ws.close()
+                            media_stream_connected = True
+                            print(f"🔗 Media stream connected flag set: {media_stream_connected}")
 
-                # Reset media stream flag when connection ends
-                media_stream_connected = False
-                print(f"🔗 Media stream disconnected - flag reset: {media_stream_connected}")
+                            await realtime_ai_ws.send(json.dumps(data))
+                            response_start_timestamp_twilio = None
+                            latest_media_timestamp = 0
+                            last_assistant_item = None
+                        elif data['event'] == 'mark':
+                            if mark_queue:
+                                mark_queue.pop(0)
 
-                # End call session in MongoDB
-                if current_call_session:
-                    await db_service.end_call_session(current_call_session.call_id)
-                    await websocket_manager.broadcast_call_status(
-                        call_id=current_call_session.call_id,
-                        status="ended"
-                    )
+                except WebSocketDisconnect:
+                    print("📞 Client disconnected from WebSocket")
+                    # Check if termination was graceful
+                    if not call_terminated_gracefully:
+                        print("⚠️ Connection closed unexpectedly - not gracefully terminated")
+                        global connection_closed_unexpectedly
+                        connection_closed_unexpectedly = True
 
-        # Updated send_to_twilio function
-        async def send_to_twilio():
-            """Receive events from the OpenAI Realtime API, send audio back to Twilio"""
-            nonlocal stream_sid, last_assistant_item, response_start_timestamp_twilio
-            global conversation_active_flag, conversation_count  # Add these globals
+                        # Stop timer on unexpected disconnect
+                        await stop_call_timer()
 
-            try:
-                async for openai_message in realtime_ai_ws:
-                    response = json.loads(openai_message)
+                        # Handle unexpected disconnection
+                        await handle_unexpected_disconnection()
 
-                    # Handle user transcription
-                    if response.get('type') == 'conversation.item.input_audio_transcription.completed':
-                        try:
-                            user_transcript = response.get('transcript', '').strip()
+                except Exception as e:
+                    print(f"❌ Error in receive_from_twilio: {e}")
+                    if not call_terminated_gracefully:
+                        connection_closed_unexpectedly = True
+                        await stop_call_timer()  # ADDED: Stop timer on error
+                        await handle_unexpected_disconnection()
+                finally:
+                    if realtime_ai_ws.open:
+                        await realtime_ai_ws.close()
 
-                            if user_transcript:
-                                print(f"User said: {user_transcript}")
-                                conversation_transcript.append(user_transcript)
+                    media_stream_connected = False
+                    print(f"🔗 Media stream disconnected - flag reset: {media_stream_connected}")
 
-                                # Set conversation activity flags
+                    # End call session in MongoDB
+                    if current_call_session and not call_terminated_gracefully:
+                        await db_service.end_call_session(current_call_session.call_id)
+                        await websocket_manager.broadcast_call_status(
+                            call_id=current_call_session.call_id,
+                            status="ended"
+                        )
+
+            async def send_to_twilio():
+                """Receive events from the OpenAI Realtime API, send audio back to Twilio"""
+                nonlocal stream_sid, last_assistant_item, response_start_timestamp_twilio
+                global conversation_active_flag, conversation_count  # Add these globals
+
+                try:
+                    async for openai_message in realtime_ai_ws:
+                        response = json.loads(openai_message)
+
+                        # Handle user transcription
+                        if response.get('type') == 'conversation.item.input_audio_transcription.completed':
+                            try:
+                                user_transcript = response.get('transcript', '').strip()
+
+                                if user_transcript:
+                                    print(f"User said: {user_transcript}")
+                                    conversation_transcript.append(user_transcript)
+
+                                    # Set conversation activity flags
+                                    conversation_active_flag = True
+                                    conversation_count += 1
+                                    print(
+                                        f"📝 Conversation activity detected - Count: {conversation_count}, Active: {conversation_active_flag}")
+
+                                    # Store user transcript in MongoDB and broadcast
+                                    if current_call_session:
+                                        await db_service.save_transcript(
+                                            call_id=current_call_session.call_id,
+                                            speaker="user",
+                                            message=user_transcript
+                                        )
+
+                                        # Broadcast to WebSocket clients
+                                        await websocket_manager.broadcast_transcript(
+                                            call_id=current_call_session.call_id,
+                                            speaker="user",
+                                            message=user_transcript,
+                                            timestamp=datetime.utcnow().isoformat()
+                                        )
+
+                                    # Check for termination conditions
+                                    should_terminate, termination_reason = should_terminate_call(user_transcript)
+                                    if should_terminate:
+                                        print(f"🔚 Termination triggered: {termination_reason}")
+                                        await terminate_call_gracefully(websocket, realtime_ai_ws, termination_reason)
+                                        return
+
+                            except Exception as e:
+                                print(f"Error processing user transcript: {e}")
+
+                        # Handle AI response transcription
+                        elif response['type'] in LOG_EVENT_TYPES:
+                            try:
+                                transcript = response['response']['output'][0]['content'][0]['transcript']
+                                print(f"AI Response: {transcript}")
+
+                                conversation_transcript.append(transcript)
+
+                                # Set conversation activity flags for AI response too
                                 conversation_active_flag = True
                                 conversation_count += 1
                                 print(
-                                    f"📝 Conversation activity detected - Count: {conversation_count}, Active: {conversation_active_flag}")
+                                    f"📝 AI response added - Count: {conversation_count}, Active: {conversation_active_flag}")
 
-                                # Store user transcript in MongoDB and broadcast
+                                # Store AI response in MongoDB and broadcast
                                 if current_call_session:
                                     await db_service.save_transcript(
                                         call_id=current_call_session.call_id,
-                                        speaker="user",
-                                        message=user_transcript
+                                        speaker="ai",
+                                        message=transcript
                                     )
 
                                     # Broadcast to WebSocket clients
                                     await websocket_manager.broadcast_transcript(
                                         call_id=current_call_session.call_id,
-                                        speaker="user",
-                                        message=user_transcript,
+                                        speaker="ai",
+                                        message=transcript,
                                         timestamp=datetime.utcnow().isoformat()
                                     )
 
-                                # Check for termination conditions
-                                should_terminate, termination_reason = should_terminate_call(user_transcript)
+                                # Check for appointment confirmation triggers
+                                appointment_triggers = [
+                                    # Slot booking variations
+                                    r'(slot|स्लॉट).*(reserve|book|confirm|बुक|रिज़र्व|कन्फर्म).*(कर रही हूँ|कर दिया|हो गया)',
+
+                                    # Appointment confirmation variations
+                                    r'(appointment|अपॉइंटमेंट).*(book|confirm|fix|बुक|कन्फर्म|फिक्स).*(कर रही हूँ|कर दिया|हो गया)'
+                                ]
+
+                                # Enhanced trigger handling in media stream
+                                if any(re.search(trigger, transcript, re.IGNORECASE) for trigger in
+                                       appointment_triggers):
+                                    print(f"✅ APPOINTMENT trigger detected: {transcript}")
+                                    await process_conversation_outcome()
+                                else:
+                                    # Handle reschedule triggers with state management
+                                    reschedule_completed = await handle_reschedule_triggers(transcript)
+                                    if reschedule_completed:
+                                        # Schedule call termination after confirmation
+                                        print(f"🔚 Reschedule completed - scheduling call termination")
+                                        await asyncio.sleep(3)  # Give time for final message
+                                        await terminate_call_gracefully(websocket, realtime_ai_ws,
+                                                                        "reschedule_completed")
+                                        return
+
+                                # Check for termination conditions (both appointment and reschedule)
+                                should_terminate, termination_reason = should_terminate_call(transcript)
+                                if not should_terminate:
+                                    should_terminate, termination_reason = should_terminate_reschedule_call(transcript)
+
                                 if should_terminate:
                                     print(f"🔚 Termination triggered: {termination_reason}")
                                     await terminate_call_gracefully(websocket, realtime_ai_ws, termination_reason)
                                     return
 
-                        except Exception as e:
-                            print(f"Error processing user transcript: {e}")
+                            except (KeyError, IndexError):
+                                print("No transcript found in response")
 
-                    # Handle AI response transcription
-                    elif response['type'] in LOG_EVENT_TYPES:
-                        try:
-                            transcript = response['response']['output'][0]['content'][0]['transcript']
-                            print(f"AI Response: {transcript}")
-
-                            conversation_transcript.append(transcript)
-
-                            # Set conversation activity flags for AI response too
-                            conversation_active_flag = True
-                            conversation_count += 1
-                            print(
-                                f"📝 AI response added - Count: {conversation_count}, Active: {conversation_active_flag}")
-
-                            # Store AI response in MongoDB and broadcast
-                            if current_call_session:
-                                await db_service.save_transcript(
-                                    call_id=current_call_session.call_id,
-                                    speaker="ai",
-                                    message=transcript
-                                )
-
-                                # Broadcast to WebSocket clients
-                                await websocket_manager.broadcast_transcript(
-                                    call_id=current_call_session.call_id,
-                                    speaker="ai",
-                                    message=transcript,
-                                    timestamp=datetime.utcnow().isoformat()
-                                )
-
-                            # Check for appointment confirmation triggers
-                            appointment_triggers = [
-                               # Slot booking variations
-                                r'(slot|स्लॉट).*(reserve|book|confirm|बुक|रिज़र्व|कन्फर्म).*(कर रही हूँ|कर दिया|हो गया)',
-                                
-                                # Appointment confirmation variations
-                                r'(appointment|अपॉइंटमेंट).*(book|confirm|fix|बुक|कन्फर्म|फिक्स).*(कर रही हूँ|कर दिया|हो गया)'
-                            ]
-
-
-                            # Enhanced trigger handling in media stream
-                            if any(re.search(trigger, transcript, re.IGNORECASE) for trigger in appointment_triggers):
-                                print(f"✅ APPOINTMENT trigger detected: {transcript}")
-                                await process_conversation_outcome()
-                            else:
-                                # Handle reschedule triggers with state management
-                                reschedule_completed = await handle_reschedule_triggers(transcript)
-                                if reschedule_completed:
-                                    # Schedule call termination after confirmation
-                                    print(f"🔚 Reschedule completed - scheduling call termination")
-                                    await asyncio.sleep(3)  # Give time for final message
-                                    await terminate_call_gracefully(websocket, realtime_ai_ws, "reschedule_completed")
-                                    return
-
-                            # Check for termination conditions (both appointment and reschedule)
-                            should_terminate, termination_reason = should_terminate_call(transcript)
-                            if not should_terminate:
-                                should_terminate, termination_reason = should_terminate_reschedule_call(transcript)
-
-                            if should_terminate:
-                                print(f"🔚 Termination triggered: {termination_reason}")
-                                await terminate_call_gracefully(websocket, realtime_ai_ws, termination_reason)
-                                return
-
-                        except (KeyError, IndexError):
-                            print("No transcript found in response")
-
-                    # Handle audio delta
-                    elif response.get('type') == 'response.audio.delta' and 'delta' in response:
-                        audio_payload = base64.b64encode(base64.b64decode(response['delta'])).decode('utf-8')
-                        audio_delta = {
-                            "event": "playAudio",
-                            "media": {
-                                "contentType": 'audio/x-mulaw',
-                                "sampleRate": 8000,
-                                "payload": audio_payload
+                        # Handle audio delta
+                        elif response.get('type') == 'response.audio.delta' and 'delta' in response:
+                            audio_payload = base64.b64encode(base64.b64decode(response['delta'])).decode('utf-8')
+                            audio_delta = {
+                                "event": "playAudio",
+                                "media": {
+                                    "contentType": 'audio/x-mulaw',
+                                    "sampleRate": 8000,
+                                    "payload": audio_payload
+                                }
                             }
+                            await websocket.send_json(audio_delta)
+
+                            if response_start_timestamp_twilio is None:
+                                response_start_timestamp_twilio = latest_media_timestamp
+                                if SHOW_TIMING_MATH:
+                                    print(
+                                        f"Setting start timestamp for new response: {response_start_timestamp_twilio}ms")
+
+                            if response.get('item_id'):
+                                last_assistant_item = response['item_id']
+
+                            await send_mark(websocket, stream_sid)
+
+                        # Handle speech started
+                        elif response.get('type') == 'input_audio_buffer.speech_started':
+                            print("Speech started detected.")
+
+                            if last_assistant_item:
+                                print(f"Interrupting response with id: {last_assistant_item}")
+                                await handle_speech_started_event()
+
+                except Exception as e:
+                    print(f"Error in send_to_twilio: {e}")
+
+            async def handle_speech_started_event():
+                """Handle interruption when the caller's speech starts"""
+                nonlocal response_start_timestamp_twilio, last_assistant_item
+                print("Handling speech started event.")
+                if mark_queue and response_start_timestamp_twilio is not None:
+                    elapsed_time = latest_media_timestamp - response_start_timestamp_twilio
+
+                    if last_assistant_item:
+                        truncate_event = {
+                            "type": "conversation.item.truncate",
+                            "item_id": last_assistant_item,
+                            "content_index": 0,
+                            "audio_end_ms": elapsed_time
                         }
-                        await websocket.send_json(audio_delta)
+                        await realtime_ai_ws.send(json.dumps(truncate_event))
 
-                        if response_start_timestamp_twilio is None:
-                            response_start_timestamp_twilio = latest_media_timestamp
-                            if SHOW_TIMING_MATH:
-                                print(f"Setting start timestamp for new response: {response_start_timestamp_twilio}ms")
+                    await websocket.send_json({
+                        "event": "clear",
+                        "streamSid": stream_sid
+                    })
 
-                        if response.get('item_id'):
-                            last_assistant_item = response['item_id']
+                    mark_queue.clear()
+                    last_assistant_item = None
+                    response_start_timestamp_twilio = None
 
-                        await send_mark(websocket, stream_sid)
+            async def send_mark(connection, stream_sid):
+                if stream_sid:
+                    mark_event = {
+                        "event": "mark",
+                        "streamSid": stream_sid,
+                        "mark": {"name": "responsePart"}
+                    }
+                    await connection.send_json(mark_event)
+                    mark_queue.append('responsePart')
 
-                    # Handle speech started
-                    elif response.get('type') == 'input_audio_buffer.speech_started':
-                        print("Speech started detected.")
+            await asyncio.gather(receive_from_twilio(), send_to_twilio())
 
-                        if last_assistant_item:
-                            print(f"Interrupting response with id: {last_assistant_item}")
-                            await handle_speech_started_event()
+            await asyncio.gather(receive_from_twilio(), send_to_twilio())
+
+    except Exception as e:
+        print(f"❌ Error in media stream handler: {e}")
+        if not call_terminated_gracefully:
+            connection_closed_unexpectedly = True
+            await stop_call_timer()
+            await handle_unexpected_disconnection()
+
+    finally:
+        # ADDED: Final cleanup to ensure timer is stopped
+        print(f"🧹 Final cleanup - ensuring timer is stopped")
+        await stop_call_timer()
+
+
+async def handle_unexpected_disconnection():
+    """Handle unexpected connection closure without graceful termination"""
+    try:
+        print("🚨 Handling unexpected disconnection")
+
+        # Get current record
+        if single_call_patient_info:
+            current_record_data = single_call_patient_info.copy()
+            current_record_name = current_record_data['name']
+        else:
+            current_record = call_queue_manager.get_current_record()
+            if current_record:
+                current_record_data = {
+                    'name': current_record.name,
+                    'phone_number': current_record.phone,
+                    'address': current_record.address,
+                    'age': current_record.age,
+                    'gender': current_record.gender
+                }
+                current_record_name = current_record.name
+            else:
+                print("❌ No current record available for unexpected disconnection")
+                return
+
+        print(f"📞 Processing unexpected disconnection for {current_record_name}")
+
+        # Check if we have any conversation
+        if conversation_transcript and len(conversation_transcript) > 0:
+            # Generate AI analysis for the incomplete call
+            full_conversation = " ".join(conversation_transcript)
+
+            try:
+                analysis_result = await generate_incomplete_call_analysis(
+                    full_conversation,
+                    current_record_name,
+                    "connection_lost"
+                )
+
+                ai_summary = analysis_result.get('summary', 'Call disconnected unexpectedly')
+                customer_intent = analysis_result.get('intent', 'neutral')
 
             except Exception as e:
-                print(f"Error in send_to_twilio: {e}")
+                print(f"⚠️ Error generating AI analysis for disconnection: {e}")
+                ai_summary = "Call disconnected unexpectedly during conversation"
+                customer_intent = "neutral"
+        else:
+            ai_summary = "Call disconnected with no conversation recorded"
+            customer_intent = "neutral"
 
-        async def handle_speech_started_event():
-            """Handle interruption when the caller's speech starts"""
-            nonlocal response_start_timestamp_twilio, last_assistant_item
-            print("Handling speech started event.")
-            if mark_queue and response_start_timestamp_twilio is not None:
-                elapsed_time = latest_media_timestamp - response_start_timestamp_twilio
+        # Calculate call duration
+        call_duration = calculate_call_duration()
 
-                if last_assistant_item:
-                    truncate_event = {
-                        "type": "conversation.item.truncate",
-                        "item_id": last_assistant_item,
-                        "content_index": 0,
-                        "audio_end_ms": elapsed_time
-                    }
-                    await realtime_ai_ws.send(json.dumps(truncate_event))
+        # Save to incomplete calls
+        await append_incomplete_call_with_analysis(
+            current_record_data,
+            reason="connection_lost",
+            call_duration=call_duration,
+            ai_summary=ai_summary,
+            customer_intent=customer_intent
+        )
 
-                await websocket.send_json({
-                    "event": "clear",
-                    "streamSid": stream_sid
-                })
+        # Update queue manager if not single call
+        if not single_call_patient_info:
+            current_record = call_queue_manager.get_current_record()
+            if current_record:
+                await call_queue_manager.complete_current_call(
+                    CallResult.CALL_INCOMPLETE,
+                    "Connection lost unexpectedly"
+                )
 
-                mark_queue.clear()
-                last_assistant_item = None
-                response_start_timestamp_twilio = None
+        print(f"✅ Unexpected disconnection handled for {current_record_name}")
 
-        async def send_mark(connection, stream_sid):
-            if stream_sid:
-                mark_event = {
-                    "event": "mark",
-                    "streamSid": stream_sid,
-                    "mark": {"name": "responsePart"}
-                }
-                await connection.send_json(mark_event)
-                mark_queue.append('responsePart')
-
-        await asyncio.gather(receive_from_twilio(), send_to_twilio())
+    except Exception as e:
+        print(f"❌ Error handling unexpected disconnection: {e}")
 
 
 async def send_initial_conversation_item(realtime_ai_ws, user_details=None):

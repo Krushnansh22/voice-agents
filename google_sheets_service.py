@@ -43,11 +43,12 @@ class GoogleSheetsService:
         }
 
         # Headers for each worksheet - Updated with Call_Analysis
+        # Headers for each worksheet - UPDATED
         self.headers = {
             'records': ['Name', 'Phone Number', 'Address', 'Age', 'Gender'],
             'appointments': [
                 'Name', 'Appointment Date', 'Time Slot', 'Doctor Name',
-                'Age', 'Gender', 'Phone Number', 'Address', 'Timestamp'
+                'Age', 'Gender', 'Phone Number', 'Address', 'Timestamp', 'Summary'  # ADDED: Summary
             ],
             'reschedules': [
                 'Name', 'Phone Number', 'Address', 'Age', 'Gender',
@@ -56,7 +57,8 @@ class GoogleSheetsService:
             ],
             'incomplete': [
                 'Name', 'Phone Number', 'Address', 'Age', 'Gender',
-                'Call Timestamp', 'Call Duration (seconds)', 'Reason', 'Notes'
+                'Call Timestamp', 'Call Duration (seconds)', 'Reason', 'Notes', 'Customer Intent'
+                # ADDED: Customer Intent Summary
             ],
             'analysis': [
                 'Call ID', 'Patient Name', 'Phone Number', 'Call Date',
@@ -419,8 +421,8 @@ class GoogleSheetsService:
             logger.error(f"Error stopping monitoring: {e}")
 
     # Append methods for different result types
-    async def append_appointment(self, appointment_details: Dict, patient_record: Dict) -> bool:
-        """Append successful appointment to Appointment_Details worksheet"""
+    async def append_appointment(self, appointment_details: Dict, patient_record: Dict, ai_summary: str = "") -> bool:
+        """Append successful appointment to Appointment_Details worksheet with AI summary"""
         try:
             logger.info(f"📝 Saving appointment for {patient_record.get('name', 'Unknown')}")
 
@@ -428,23 +430,27 @@ class GoogleSheetsService:
                 self.executor, lambda: self.current_spreadsheet.worksheet(self.worksheets['appointments'])
             )
 
+            # UPDATED: Row data to match new column structure
+            # Name, Appointment Date, Time Slot, Doctor Name, Age, Gender, Phone Number, Address, Timestamp, Summary
             row_data = [
-                patient_record.get('name', ''),
-                appointment_details.get('appointment_date', ''),
+                patient_record.get('name', ''),  # Name
+                appointment_details.get('appointment_date', ''),  # Appointment Date
                 appointment_details.get('appointment_time', '') or appointment_details.get('time_slot', ''),
-                appointment_details.get('doctor_name', 'डॉ. निशा'),
-                patient_record.get('age', ''),
-                patient_record.get('gender', ''),
-                patient_record.get('phone_number', ''),
-                patient_record.get('address', ''),
-                datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                # Time Slot
+                appointment_details.get('doctor_name', 'डॉ. निशा'),  # Doctor Name
+                patient_record.get('age', ''),  # Age
+                patient_record.get('gender', ''),  # Gender
+                patient_record.get('phone_number', ''),  # Phone Number
+                patient_record.get('address', ''),  # Address
+                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),  # Timestamp
+                ai_summary or "Appointment booked successfully"  # Summary (NEW - AI generated)
             ]
 
             await asyncio.get_event_loop().run_in_executor(
                 self.executor, lambda: worksheet.append_row(row_data)
             )
 
-            logger.info(f"✅ Appointment saved successfully")
+            logger.info(f"✅ Appointment saved successfully with AI summary")
             return True
 
         except Exception as e:
@@ -548,8 +554,10 @@ class GoogleSheetsService:
             logger.error(f"❌ Failed to save reschedule request: {e}")
             return False
 
-    async def append_incomplete_call(self, patient_record: Dict, reason: str = "call_incomplete", call_duration: int = 0) -> bool:
-        """Append incomplete call to Incomplete_Calls worksheet"""
+    async def append_incomplete_call(self, patient_record: Dict, reason: str = "call_incomplete",
+                                     call_duration: int = 0, customer_intent_summary: str = "",
+                                     ai_summary: str = "") -> bool:
+        """Append incomplete call to Incomplete_Calls worksheet with updated format"""
         try:
             logger.info(f"📞 Saving incomplete call for {patient_record.get('name', 'Unknown')}")
 
@@ -561,19 +569,35 @@ class GoogleSheetsService:
                 "call_timeout": "Call exceeded time limit",
                 "call_incomplete": "Call ended without clear resolution",
                 "minimal_interaction": "Very few exchanges in conversation",
-                "goodbye_detected": "Call ended with natural goodbye"
+                "goodbye_detected": "Call ended with natural goodbye",
+                "Not Picked-up": "Call was not answered by the patient",
+                "connection_lost": "Connection was lost unexpectedly"  # ADDED: New reason
             }
 
+            # Use AI summary if provided, otherwise use reason notes
+            notes_field = ai_summary if ai_summary else reason_notes.get(reason, "Call incomplete")
+
+            # Map customer intent to proper format
+            intent_mapping = {
+                "interested": "Interested",
+                "not_interested": "Not Interested",
+                "neutral": "Neutral"
+            }
+            formatted_intent = intent_mapping.get(customer_intent_summary.lower(), customer_intent_summary)
+
+            # UPDATED: Row data to match new column structure
+            # Name, Phone Number, Address, Age, Gender, Call Timestamp, Call Duration (seconds), Reason, Notes, Customer Intent Summary
             row_data = [
-                patient_record.get('name', ''),
-                patient_record.get('phone_number', ''),
-                patient_record.get('address', ''),
-                patient_record.get('age', ''),
-                patient_record.get('gender', ''),
-                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                call_duration,
-                reason,
-                reason_notes.get(reason, "Call incomplete")
+                patient_record.get('name', ''),  # Name
+                patient_record.get('phone_number', ''),  # Phone Number
+                patient_record.get('address', ''),  # Address
+                patient_record.get('age', ''),  # Age
+                patient_record.get('gender', ''),  # Gender
+                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),  # Call Timestamp
+                call_duration,  # Call Duration (seconds)
+                reason,  # Reason
+                notes_field,  # Notes (AI Summary or default)
+                formatted_intent or "Neutral"  # Customer Intent Summary
             ]
 
             await asyncio.get_event_loop().run_in_executor(

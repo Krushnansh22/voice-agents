@@ -525,8 +525,8 @@ class EnhancedCallQueueManager:
             # Keep status as RUNNING to allow new records to be processed
             # Only mark as COMPLETED if explicitly stopped
 
-    async def _add_to_reschedule_for_empty_call(self, record: CallRecord, reason: str):
-        """Add record to reschedule requests for auto-skipped calls"""
+    async def _add_to_incomplete_calls_for_not_picked_up(self, record: CallRecord, reason: str):
+        """Add record to incomplete calls for auto-skipped/not picked up calls"""
         try:
             from google_sheets_service import google_sheets_service
 
@@ -539,28 +539,58 @@ class EnhancedCallQueueManager:
                 'gender': record.gender
             }
 
-            # Create callback details for auto-reschedule with clear reason
-            callback_details = {
-                'callback_date': 'TBD - Auto Retry',
-                'callback_time': 'TBD - Auto Retry',
-                'callback_day': 'TBD - Auto Retry',
-                'callback_period': 'TBD - Auto Retry',
-                'normalized_callback_date': 'TBD - Auto Retry',
-                'reschedule_confirmed': True,
-                'auto_generated': True,
-                'reason': f"Auto-skipped: {reason}"
-            }
-
-            # Add to reschedule requests
-            success = await google_sheets_service.append_reschedule(patient_record, callback_details)
+            # Add to incomplete calls with "Not Picked-up" reason
+            success = await google_sheets_service.append_incomplete_call(
+                patient_record,
+                reason="Not Picked-up",  # FIXED: Use "Not Picked-up" as reason
+                call_duration=0,  # No duration for unanswered calls
+                customer_intent_summary=f"Auto-skipped: {reason}"  # Add intent summary
+            )
 
             if success:
-                logger.info(f"✅ Added {record.name} to reschedule requests (auto-skipped - will retry later)")
+                logger.info(f"✅ Added {record.name} to incomplete calls (not picked up)")
             else:
-                logger.error(f"❌ Failed to add {record.name} to reschedule requests")
+                logger.error(f"❌ Failed to add {record.name} to incomplete calls")
 
         except Exception as e:
-            logger.error(f"❌ Error adding to reschedule: {e}")
+            logger.error(f"❌ Error adding to incomplete calls: {e}")
+
+    # async def _add_to_reschedule_for_empty_call(self, record: CallRecord, reason: str):
+    #     """Add record to reschedule requests for auto-skipped calls"""
+    #     try:
+    #         from google_sheets_service import google_sheets_service
+    #
+    #         # Prepare patient record
+    #         patient_record = {
+    #             'name': record.name,
+    #             'phone_number': record.phone,
+    #             'address': record.address,
+    #             'age': record.age,
+    #             'gender': record.gender
+    #         }
+    #
+    #         # Create callback details for auto-reschedule with clear reason
+    #         callback_details = {
+    #             'callback_date': 'TBD - Auto Retry',
+    #             'callback_time': 'TBD - Auto Retry',
+    #             'callback_day': 'TBD - Auto Retry',
+    #             'callback_period': 'TBD - Auto Retry',
+    #             'normalized_callback_date': 'TBD - Auto Retry',
+    #             'reschedule_confirmed': True,
+    #             'auto_generated': True,
+    #             'reason': f"Auto-skipped: {reason}"
+    #         }
+    #
+    #         # Add to reschedule requests
+    #         success = await google_sheets_service.append_reschedule(patient_record, callback_details)
+    #
+    #         if success:
+    #             logger.info(f"✅ Added {record.name} to reschedule requests (auto-skipped - will retry later)")
+    #         else:
+    #             logger.error(f"❌ Failed to add {record.name} to reschedule requests")
+    #
+    #     except Exception as e:
+    #         logger.error(f"❌ Error adding to reschedule: {e}")
 
     async def auto_skip_empty_call(self, reason: str = "No conversation detected") -> Dict:
         """Auto-skip current call due to no connection/conversation at 30s timeout"""
@@ -572,10 +602,10 @@ class EnhancedCallQueueManager:
 
             logger.info(f"🔄 Auto-skipping call to {current_record.name} - {reason}")
 
-            # ALWAYS add auto-skipped calls to reschedule requests
-            # These are potential leads that should be called back later
-            await self._add_to_reschedule_for_empty_call(current_record, reason)
-            logger.info(f"📅 Added {current_record.name} to reschedule requests (auto-skipped)")
+            # CHANGED: Add auto-skipped calls to INCOMPLETE_CALLS instead of reschedule requests
+            # These are calls that were not picked up, not reschedule requests
+            await self._add_to_incomplete_calls_for_not_picked_up(current_record, reason)
+            logger.info(f"📞 Added {current_record.name} to incomplete calls (not picked up)")
 
             # Mark as skipped
             current_record.status = CallResult.SKIPPED
@@ -585,20 +615,21 @@ class EnhancedCallQueueManager:
 
             # Update statistics
             self.stats["auto_skipped_calls"] += 1
-            self.stats["reschedule_requests"] += 1
+            # REMOVED: Don't increment reschedule_requests for auto-skipped calls
+            # self.stats["reschedule_requests"] += 1
 
             # Move to next record
             self.current_index += 1
             self._call_in_progress = False
 
-            logger.info(f"✅ Auto-skipped {current_record.name} and added to reschedule requests")
+            logger.info(f"✅ Auto-skipped {current_record.name} and added to incomplete calls")
 
             return {
                 "success": True,
                 "action": "auto_skipped",
                 "record": current_record.to_dict(),
                 "reason": reason,
-                "added_to_reschedule": True,
+                "added_to_incomplete_calls": True,  # CHANGED: Updated field name
                 "next_index": self.current_index
             }
 
@@ -699,7 +730,7 @@ class EnhancedCallQueueManager:
                                     logger.info(f"🔄 Auto-skipping {current_record.name} due to no answer/connection")
 
                                     # Auto-skip the call
-                                    skip_result = await self.auto_skip_empty_call("Call not answered - no media stream activity at 30s")
+                                    skip_result = await self.auto_skip_empty_call("Call not answered")
 
                                     if skip_result["success"]:
                                         logger.info(f"✅ Successfully auto-skipped {current_record.name}")
