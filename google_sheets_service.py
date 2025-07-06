@@ -158,7 +158,7 @@ class GoogleSheetsService:
             from settings import settings
 
             # Initialize Drive notification service
-            webhook_url = f"{settings.HOST_URL}/api/drive-webhook"
+            webhook_url = f"{settings.HTTPS_HOST_URL}/api/drive-webhook"
 
             if not drive_notification_service.drive_service:
                 initialized = await drive_notification_service.initialize(webhook_url)
@@ -610,6 +610,26 @@ class GoogleSheetsService:
         except Exception as e:
             logger.error(f"❌ Failed to save incomplete call: {e}")
             return False
+
+    async def append_incomplete_call_with_graceful_fallback(self, patient_record: Dict, reason: str = "call_incomplete",
+                                                            call_duration: int = 0, customer_intent_summary: str = "",
+                                                            ai_summary: str = "") -> bool:
+        """Append incomplete call with graceful fallback if sheets not available"""
+        try:
+            if not self.current_spreadsheet:
+                logger.warning("⚠️ No Google Sheets connected - cannot save incomplete call data")
+                logger.info(f"📊 Call data would have been: {patient_record.get('name')} - {reason}")
+                return True  # Don't fail the call process
+
+            # Use existing method if sheets are available
+            return await self.append_incomplete_call(
+                patient_record, reason, call_duration, customer_intent_summary, ai_summary
+            )
+
+        except Exception as e:
+            logger.error(f"❌ Error saving to sheets: {e}")
+            logger.warning("⚠️ Continuing without sheets save to prevent call failure")
+            return True
 
     async def append_call_analysis(self, analysis_data: Dict) -> bool:
         """Append call analysis to Call_Analysis worksheet"""

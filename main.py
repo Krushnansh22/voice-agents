@@ -810,22 +810,39 @@ async def append_reschedule_to_sheets(patient_record, callback_details=None):
         print(f"❌ Error saving reschedule request: {e}")
         return False
 
-async def append_incomplete_call_to_sheets(patient_record, reason="call_incomplete"):
-    """Append incomplete call details to Google Sheets"""
+async def append_incomplete_call_with_analysis(patient_record: dict, reason: str, call_duration: int, ai_summary: str,
+                                               customer_intent: str):
+    """Append incomplete call with AI analysis to Google Sheets with graceful fallback"""
     try:
-        call_duration = calculate_call_duration()
-        success = await google_sheets_service.append_incomplete_call(patient_record, reason, call_duration)
+        # Check if sheets are connected
+        if not google_sheets_service.current_spreadsheet:
+            logger.warning("⚠️ No Google Sheets connected for incomplete call save")
+            logger.info(f"📊 Incomplete call data: {patient_record.get('name', 'Unknown')} - {reason}")
+            logger.info(f"   Duration: {call_duration}s, Intent: {customer_intent}")
+            logger.info(f"   Summary: {ai_summary[:100]}...")
+            return True  # Don't fail - data is still in MongoDB
+
+        success = await google_sheets_service.append_incomplete_call(
+            patient_record,
+            reason=reason,
+            call_duration=call_duration,
+            customer_intent_summary=customer_intent,
+            ai_summary=ai_summary
+        )
 
         if success:
-            print(f"✅ Incomplete call saved to Google Sheets for {patient_record.get('name', 'Unknown')}")
+            logger.info(f"✅ Incomplete call with AI analysis saved for {patient_record.get('name', 'Unknown')}")
+            logger.info(f"   Summary: {ai_summary[:100]}...")
+            logger.info(f"   Intent: {customer_intent}")
             return True
         else:
-            print(f"❌ Failed to save incomplete call to Google Sheets")
-            return False
+            logger.warning(f"⚠️ Failed to save incomplete call to sheets - continuing anyway")
+            return True  # Don't fail the call process
 
     except Exception as e:
-        print(f"❌ Error saving incomplete call: {e}")
-        return False
+        logger.error(f"❌ Error saving incomplete call with AI analysis: {e}")
+        logger.warning("⚠️ Continuing without sheets save to prevent call failure")
+        return True
 
 async def process_reschedule_outcome():
     """Process reschedule outcome and save to callback sheet with proper headers"""
@@ -2255,15 +2272,54 @@ async def get_call_transcripts(call_id: str):
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
 
+
+async def ensure_sheets_connection() -> bool:
+    """Ensure Google Sheets are connected, try default if not"""
+    try:
+        if not google_sheets_service.current_spreadsheet:
+            # Try to get default sheet ID from settings
+            default_sheet_id = getattr(settings, 'DEFAULT_SHEET_ID', None)
+
+            if default_sheet_id:
+                logger.info(f"🔗 Auto-connecting to default sheet: {default_sheet_id}")
+
+                # Initialize Google Sheets service if not already done
+                if not google_sheets_service.client:
+                    initialized = await google_sheets_service.initialize()
+                    if not initialized:
+                        logger.error("❌ Failed to initialize Google Sheets service")
+                        return False
+
+                # Connect to default sheet
+                result = await google_sheets_service.connect_to_sheet(default_sheet_id, "Records")
+
+                if result["success"]:
+                    logger.info(f"✅ Auto-connected to default sheet successfully")
+                    return True
+                else:
+                    logger.error(f"❌ Failed to connect to default sheet: {result.get('error')}")
+                    return False
+            else:
+                logger.warning("⚠️ No DEFAULT_SHEET_ID configured in settings")
+                return False
+        else:
+            logger.info("✅ Google Sheets already connected")
+            return True
+
+    except Exception as e:
+        logger.error(f"❌ Error ensuring sheets connection: {e}")
+        return False
+
+
 @app.post("/api/single-call")
 async def initiate_single_call(
-    phone_number: str,
-    name: str, 
-    age: str,
-    gender: str,
-    address: str = ""
+        phone_number: str,
+        name: str,
+        age: Optional[str] = "",
+        gender: Optional[str] = "",
+        address: Optional[str] = ""
 ):
-    """Initiate a single call with provided patient parameters"""
+    """Initiate a single call with provided patient parameters and auto-connect to sheets"""
     try:
         # Normalize phone number
         def normalize_phone_number(phone: str) -> str:
@@ -2276,43 +2332,52 @@ async def initiate_single_call(
             """
             # Remove any spaces, dashes, or other non-digit characters except +
             phone = ''.join(c for c in phone if c.isdigit() or c == '+')
-            
+
             # If already starts with +91, return as is
             if phone.startswith('+91'):
                 return phone
-            
+
             # If starts with 0, remove it and add +91
             if phone.startswith('0') and len(phone) == 11:
                 return '+91' + phone[1:]
-            
+
             # If 10 digits without country code, add +91
             if len(phone) == 10 and phone[0] in '6789':  # Indian mobile numbers start with 6,7,8,9
                 return '+91' + phone
-            
+
             # If already has 91 prefix without +, add +
             if phone.startswith('91') and len(phone) == 12:
                 return '+' + phone
-            
+
             # Return as is if none of the above conditions match
             return phone if phone.startswith('+') else '+91' + phone
 
         # Normalize the phone number
         normalized_phone = normalize_phone_number(phone_number)
-        
+
         # Validate phone number format (basic validation)
         if not normalized_phone or len(normalized_phone) < 13:  # +91 + 10 digits = 13 chars minimum
             raise HTTPException(status_code=400, detail="Valid phone number required")
 
         # Validate required fields
-        if not name or not age or not gender:
-            raise HTTPException(status_code=400, detail="Name, age, and gender are required")
+        # if not name or not age or not gender:
+        #     raise HTTPException(status_code=400, detail="Name, age, and gender are required")
 
         # Check if queue is currently running or if there's a call in progress
         if call_queue_manager._call_in_progress:
             raise HTTPException(
-                status_code=409, 
+                status_code=409,
                 detail="Another call is currently in progress. Please wait for it to complete."
             )
+
+        # ENHANCED: Auto-connect to Google Sheets if not already connected
+        logger.info("🔗 Ensuring Google Sheets connection for single call...")
+        sheets_connected = await ensure_sheets_connection()
+
+        if sheets_connected:
+            logger.info("✅ Google Sheets ready for single call data storage")
+        else:
+            logger.warning("⚠️ Google Sheets not available - call will proceed but data may not be saved to sheets")
 
         # Create a temporary CallRecord for this single call
         from call_queue_manager import CallRecord, CallResult
@@ -2357,34 +2422,22 @@ async def initiate_single_call(
             global current_call_uuid
             current_call_uuid = call_uuid
 
-            # Create call session in database for single call
-            try:
-                from database.db_service import db_service
-                call_session = await db_service.create_call_session(
-                    patient_name=name,
-                    patient_phone=normalized_phone  # Use normalized phone number
-                )
-                logger.info(f"✅ Created call session in DB: {call_session.call_id}")
-
-                # Store additional patient info in a global variable for the media stream handler
-                global single_call_patient_info
-                single_call_patient_info = {
-                    "name": name,
-                    "phone_number": normalized_phone,  # Use normalized phone number
-                    "age": age,
-                    "gender": gender,
-                    "address": address,
-                    "call_session_id": call_session.call_id
-                }
-
-            except Exception as db_error:
-                logger.error(f"⚠️ Failed to create call session in DB: {db_error}")
-                # Continue anyway - don't fail the call for DB issues
+            # FIXED: Only create ONE call session - don't create here since media stream will create it
+            # Instead, store the patient info globally for media stream to use
+            global single_call_patient_info
+            single_call_patient_info = {
+                "name": name,
+                "phone_number": normalized_phone,  # Use normalized phone number
+                "age": age,
+                "gender": gender,
+                "address": address
+            }
 
             logger.info(f"✅ Single call initiated successfully")
             logger.info(f"   Patient: {name}")
             logger.info(f"   Phone: {normalized_phone}")
             logger.info(f"   Call UUID: {call_uuid}")
+            logger.info(f"   Sheets Connected: {sheets_connected}")
 
             return {
                 "status": "success",
@@ -2397,6 +2450,7 @@ async def initiate_single_call(
                     "patient_gender": gender,
                     "patient_address": address,
                     "call_status": "initiated",
+                    "sheets_connected": sheets_connected,
                     "timestamp": datetime.now().isoformat()
                 }
             }
@@ -2410,7 +2464,7 @@ async def initiate_single_call(
             single_call_record.result_details = str(plivo_error)
 
             raise HTTPException(
-                status_code=500, 
+                status_code=500,
                 detail=f"Failed to initiate call: {str(plivo_error)}"
             )
 

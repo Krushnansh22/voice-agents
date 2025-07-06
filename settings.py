@@ -20,6 +20,7 @@ class Settings(BaseSettings):
 
     # Server Configuration
     HOST_URL: str
+    HTTPS_HOST_URL: str
     PORT: int = 8090
 
     # Auto Hangup Configuration
@@ -57,6 +58,8 @@ class Settings(BaseSettings):
     RESCHEDULE_REQUESTS_FILE: str = "Reschedule_Requests.xlsx"
     INCOMPLETE_CALLS_FILE: str = "Incomplete_Calls.xlsx"
     NOT_INTERESTED_CALLS_FILE: str = "Not_Interested_Calls.xlsx"
+
+    DEFAULT_SHEET_ID: str
 
     # Security Settings
     ENABLE_CALL_RECORDING: bool = True
