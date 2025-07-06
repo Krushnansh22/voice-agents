@@ -1,6 +1,6 @@
 """
-Updated Google Sheets Service with Google Drive API Push Notifications
-Real-time monitoring using official Google Drive API + Call Analysis Integration
+Updated Google Sheets Service with Date-Time Standardization
+All dates and times are now standardized to YYYY-MM-DD HH:MM AM/PM format
 """
 import asyncio
 import logging
@@ -10,11 +10,14 @@ from google.oauth2.service_account import Credentials
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor
 
+# Import the datetime standardizer
+from datetime_standardizer import datetime_standardizer, get_current_timestamp_standard
+
 logger = logging.getLogger(__name__)
 
 
 class GoogleSheetsService:
-    """Enhanced Google Sheets service with real-time Drive API monitoring and Call Analysis"""
+    """Enhanced Google Sheets service with standardized date-time formats"""
 
     def __init__(self, credentials_file: str = "credentials.json"):
         self.credentials_file = credentials_file
@@ -33,7 +36,7 @@ class GoogleSheetsService:
         self.last_row_count = 0
         self.last_known_data = []
 
-        # Worksheet mappings - Updated with Call_Analysis
+        # Worksheet mappings
         self.worksheets = {
             'records': 'Records',
             'appointments': 'Appointment_Details',
@@ -42,13 +45,12 @@ class GoogleSheetsService:
             'analysis': 'Call_Analysis'
         }
 
-        # Headers for each worksheet - Updated with Call_Analysis
-        # Headers for each worksheet - UPDATED
+        # UPDATED Headers with standardized date-time column names
         self.headers = {
             'records': ['Name', 'Phone Number', 'Address', 'Age', 'Gender'],
             'appointments': [
-                'Name', 'Appointment Date', 'Time Slot', 'Doctor Name',
-                'Age', 'Gender', 'Phone Number', 'Address', 'Timestamp', 'Summary'  # ADDED: Summary
+                'Name', 'Appointment Date', 'Appointment Time', 'Doctor Name',
+                'Age', 'Gender', 'Phone Number', 'Address', 'Timestamp', 'Summary'
             ],
             'reschedules': [
                 'Name', 'Phone Number', 'Address', 'Age', 'Gender',
@@ -58,7 +60,6 @@ class GoogleSheetsService:
             'incomplete': [
                 'Name', 'Phone Number', 'Address', 'Age', 'Gender',
                 'Call Timestamp', 'Call Duration (seconds)', 'Reason', 'Notes', 'Customer Intent'
-                # ADDED: Customer Intent Summary
             ],
             'analysis': [
                 'Call ID', 'Patient Name', 'Phone Number', 'Call Date',
@@ -67,6 +68,7 @@ class GoogleSheetsService:
             ]
         }
 
+    # [Previous initialization and connection methods remain the same]
     async def initialize(self) -> bool:
         """Initialize Google Sheets client"""
         try:
@@ -123,7 +125,7 @@ class GoogleSheetsService:
                     "error": f"Invalid sheet structure: {validation_result['error']}"
                 }
 
-            # Setup result worksheets (including Call_Analysis)
+            # Setup result worksheets
             await self._setup_result_worksheets()
 
             # Setup Drive API monitoring
@@ -151,6 +153,7 @@ class GoogleSheetsService:
                 "error": str(e)
             }
 
+    # [Other connection and validation methods remain the same]
     async def _setup_drive_monitoring(self) -> bool:
         """Setup Google Drive API monitoring for real-time updates"""
         try:
@@ -420,9 +423,9 @@ class GoogleSheetsService:
         except Exception as e:
             logger.error(f"Error stopping monitoring: {e}")
 
-    # Append methods for different result types
+    # UPDATED: Append methods with date-time standardization
     async def append_appointment(self, appointment_details: Dict, patient_record: Dict, ai_summary: str = "") -> bool:
-        """Append successful appointment to Appointment_Details worksheet with AI summary"""
+        """Append successful appointment to Appointment_Details worksheet with combined date-time in date column"""
         try:
             logger.info(f"📝 Saving appointment for {patient_record.get('name', 'Unknown')}")
 
@@ -430,31 +433,119 @@ class GoogleSheetsService:
                 self.executor, lambda: self.current_spreadsheet.worksheet(self.worksheets['appointments'])
             )
 
-            # UPDATED: Row data to match new column structure
-            # Name, Appointment Date, Time Slot, Doctor Name, Age, Gender, Phone Number, Address, Timestamp, Summary
+            # STANDARDIZE appointment details using datetime_standardizer
+            from datetime_standardizer import datetime_standardizer, get_current_timestamp_standard
+
+            standardized_details = datetime_standardizer.standardize_appointment_data(appointment_details)
+
+            # COMBINE date and time into single field for "Appointment Date" column
+            appointment_date = standardized_details.get('appointment_date', '')
+            appointment_time = standardized_details.get('appointment_time', '')
+
+            # Create combined date-time for the "Appointment Date" column
+            if appointment_date and appointment_time:
+                combined_appointment_datetime = f"{appointment_date} {appointment_time}"
+            elif appointment_date:
+                combined_appointment_datetime = appointment_date  # Just date if no time
+            else:
+                combined_appointment_datetime = ""  # Empty if no date
+
+            # Keep original time for "Time Slot" column (for backward compatibility/reference)
+            time_slot_value = standardized_details.get('appointment_time', '') or standardized_details.get('time_slot',
+                                                                                                           '')
+
+            # Get standardized timestamp
+            standard_timestamp = get_current_timestamp_standard()
+
+            # Row data with COMBINED date-time in "Appointment Date" column
+            # Columns: Name, Appointment Date, Time Slot, Doctor Name, Age, Gender, Phone Number, Address, Timestamp, Summary
             row_data = [
                 patient_record.get('name', ''),  # Name
-                appointment_details.get('appointment_date', ''),  # Appointment Date
-                appointment_details.get('appointment_time', '') or appointment_details.get('time_slot', ''),
-                # Time Slot
-                appointment_details.get('doctor_name', 'डॉ. निशा'),  # Doctor Name
+                combined_appointment_datetime,  # Appointment Date (NOW CONTAINS: YYYY-MM-DD HH:MM AM/PM)
+                time_slot_value,  # Time Slot (UNCHANGED: Original time reference)
+                standardized_details.get('doctor_name', 'डॉ. निशा'),  # Doctor Name
                 patient_record.get('age', ''),  # Age
                 patient_record.get('gender', ''),  # Gender
                 patient_record.get('phone_number', ''),  # Phone Number
                 patient_record.get('address', ''),  # Address
-                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),  # Timestamp
-                ai_summary or "Appointment booked successfully"  # Summary (NEW - AI generated)
+                standard_timestamp,  # Timestamp (YYYY-MM-DD HH:MM AM/PM)
+                ai_summary or "Appointment booked successfully"  # Summary
             ]
 
             await asyncio.get_event_loop().run_in_executor(
                 self.executor, lambda: worksheet.append_row(row_data)
             )
 
-            logger.info(f"✅ Appointment saved successfully with AI summary")
+            logger.info(f"✅ Appointment saved with combined date-time in Appointment Date column")
+            logger.info(f"   Appointment Date: '{combined_appointment_datetime}' (Combined format)")
+            logger.info(f"   Time Slot: '{time_slot_value}' (Reference)")
+            logger.info(f"   Timestamp: '{standard_timestamp}'")
             return True
 
         except Exception as e:
             logger.error(f"❌ Failed to save appointment: {e}")
+            return False
+
+    async def append_reschedule(self, patient_record: Dict, callback_details: Dict = None) -> bool:
+        """Append reschedule request to Reschedule_Requests worksheet with standardized date-time"""
+        try:
+            logger.info(f"📅 Saving reschedule request for {patient_record.get('name', 'Unknown')}")
+
+            worksheet = await asyncio.get_event_loop().run_in_executor(
+                self.executor, lambda: self.current_spreadsheet.worksheet(self.worksheets['reschedules'])
+            )
+
+            # STANDARDIZE callback details using datetime_standardizer
+            if callback_details:
+                standardized_callback = datetime_standardizer.standardize_reschedule_data(callback_details)
+            else:
+                standardized_callback = {}
+
+            # Get standardized timestamp
+            standard_timestamp = get_current_timestamp_standard()
+
+            # Process callback details with standardization
+            callback_date = standardized_callback.get('normalized_callback_date') or standardized_callback.get('callback_date', "")
+            callback_time = standardized_callback.get('callback_time', "")
+
+            # Standardize the callback time if it exists
+            if callback_time:
+                callback_time = datetime_standardizer.standardize_time(callback_time)
+
+            callback_day = standardized_callback.get('callback_day', "")
+            callback_period = standardized_callback.get('callback_period', "")
+
+            # Enhanced priority calculation
+            priority = self._calculate_reschedule_priority(standardized_callback)
+
+            # Prepare row data with standardized formats
+            row_data = [
+                patient_record.get('name', ''),                     # Name
+                patient_record.get('phone_number', ''),             # Phone Number
+                patient_record.get('address', ''),                  # Address
+                patient_record.get('age', ''),                     # Age
+                patient_record.get('gender', ''),                  # Gender
+                standard_timestamp,                                 # Call Timestamp (YYYY-MM-DD HH:MM AM/PM)
+                callback_date,                                      # Preferred Callback Date (YYYY-MM-DD)
+                callback_time,                                      # Preferred Callback Time (HH:MM AM/PM)
+                callback_day,                                       # Preferred Callback Day
+                callback_period,                                    # Preferred Callback Period
+                "Reschedule Requested",                             # Status
+                priority                                            # Priority
+            ]
+
+            await asyncio.get_event_loop().run_in_executor(
+                self.executor, lambda: worksheet.append_row(row_data)
+            )
+
+            logger.info(f"✅ Reschedule request saved with standardized date-time format")
+            logger.info(f"   Call Timestamp: {standard_timestamp}")
+            logger.info(f"   Callback Date: {callback_date}")
+            logger.info(f"   Callback Time: {callback_time}")
+            return True
+
+        except Exception as e:
+            logger.error(f"❌ Failed to save reschedule request: {e}")
             return False
 
     def _calculate_reschedule_priority(self, callback_details: Dict) -> str:
@@ -473,12 +564,15 @@ class GoogleSheetsService:
             # High priority for specific date within next 3 days
             if callback_date and callback_date != 'TBD':
                 try:
-                    # Try to parse DD-MM-YYYY format
+                    # Try to parse YYYY-MM-DD format (now standardized)
                     if '-' in callback_date and len(callback_date.split('-')) == 3:
                         parts = callback_date.split('-')
-                        callback_datetime = datetime(int(parts[2]), int(parts[1]), int(parts[0]))
-                        days_diff = (callback_datetime - datetime.now()).days
+                        if len(parts[0]) == 4:  # YYYY-MM-DD format
+                            callback_datetime = datetime(int(parts[0]), int(parts[1]), int(parts[2]))
+                        else:  # DD-MM-YYYY format (fallback)
+                            callback_datetime = datetime(int(parts[2]), int(parts[1]), int(parts[0]))
 
+                        days_diff = (callback_datetime - datetime.now()).days
                         if days_diff <= 3:
                             return "High"
                         elif days_diff <= 7:
@@ -501,63 +595,10 @@ class GoogleSheetsService:
             logger.warning(f"⚠️ Error calculating priority: {e}")
             return "Normal"
 
-    async def append_reschedule(self, patient_record: Dict, callback_details: Dict = None) -> bool:
-        """Append reschedule request to Reschedule_Requests worksheet"""
-        try:
-            logger.info(f"📅 Saving reschedule request for {patient_record.get('name', 'Unknown')}")
-
-            worksheet = await asyncio.get_event_loop().run_in_executor(
-                self.executor, lambda: self.current_spreadsheet.worksheet(self.worksheets['reschedules'])
-            )
-
-            # Process callback details
-            callback_date = ""
-            callback_time = ""
-            callback_day = ""
-            callback_period = ""
-            priority = "Normal"
-
-            if callback_details:
-                # Use normalized date if available
-                callback_date = callback_details.get('normalized_callback_date') or callback_details.get('callback_date', "")
-                callback_time = callback_details.get('callback_time', "")
-                callback_day = callback_details.get('callback_day', "")
-                callback_period = callback_details.get('callback_period', "")
-
-                # Enhanced priority calculation
-                priority = self._calculate_reschedule_priority(callback_details)
-
-            # Prepare row data matching headers
-            row_data = [
-                patient_record.get('name', ''),                          # Name
-                patient_record.get('phone_number', ''),                  # Phone Number
-                patient_record.get('address', ''),                       # Address
-                patient_record.get('age', ''),                          # Age
-                patient_record.get('gender', ''),                       # Gender
-                datetime.now().strftime("%d-%m-%Y %H:%M:%S"),           # Call Timestamp
-                callback_date,                                           # Preferred Callback Date
-                callback_time,                                           # Preferred Callback Time
-                callback_day,                                            # Preferred Callback Day
-                callback_period,                                         # Preferred Callback Period
-                "Reschedule Requested",                                  # Status
-                priority                                                 # Priority
-            ]
-
-            await asyncio.get_event_loop().run_in_executor(
-                self.executor, lambda: worksheet.append_row(row_data)
-            )
-
-            logger.info(f"✅ Reschedule request saved successfully")
-            return True
-
-        except Exception as e:
-            logger.error(f"❌ Failed to save reschedule request: {e}")
-            return False
-
     async def append_incomplete_call(self, patient_record: Dict, reason: str = "call_incomplete",
                                      call_duration: int = 0, customer_intent_summary: str = "",
                                      ai_summary: str = "") -> bool:
-        """Append incomplete call to Incomplete_Calls worksheet with updated format"""
+        """Append incomplete call to Incomplete_Calls worksheet with standardized timestamp"""
         try:
             logger.info(f"📞 Saving incomplete call for {patient_record.get('name', 'Unknown')}")
 
@@ -571,7 +612,7 @@ class GoogleSheetsService:
                 "minimal_interaction": "Very few exchanges in conversation",
                 "goodbye_detected": "Call ended with natural goodbye",
                 "Not Picked-up": "Call was not answered by the patient",
-                "connection_lost": "Connection was lost unexpectedly"  # ADDED: New reason
+                "connection_lost": "Connection was lost unexpectedly"
             }
 
             # Use AI summary if provided, otherwise use reason notes
@@ -585,15 +626,18 @@ class GoogleSheetsService:
             }
             formatted_intent = intent_mapping.get(customer_intent_summary.lower(), customer_intent_summary)
 
-            # UPDATED: Row data to match new column structure
-            # Name, Phone Number, Address, Age, Gender, Call Timestamp, Call Duration (seconds), Reason, Notes, Customer Intent Summary
+            # Get standardized timestamp
+            standard_timestamp = get_current_timestamp_standard()
+
+            # Row data with standardized timestamp format
+            # Name, Phone Number, Address, Age, Gender, Call Timestamp, Call Duration (seconds), Reason, Notes, Customer Intent
             row_data = [
                 patient_record.get('name', ''),  # Name
                 patient_record.get('phone_number', ''),  # Phone Number
                 patient_record.get('address', ''),  # Address
                 patient_record.get('age', ''),  # Age
                 patient_record.get('gender', ''),  # Gender
-                datetime.now().strftime("%Y-%m-%d %H:%M:%S"),  # Call Timestamp
+                standard_timestamp,  # Call Timestamp (YYYY-MM-DD HH:MM AM/PM)
                 call_duration,  # Call Duration (seconds)
                 reason,  # Reason
                 notes_field,  # Notes (AI Summary or default)
@@ -604,35 +648,15 @@ class GoogleSheetsService:
                 self.executor, lambda: worksheet.append_row(row_data)
             )
 
-            logger.info(f"✅ Incomplete call saved successfully")
+            logger.info(f"✅ Incomplete call saved with standardized timestamp: {standard_timestamp}")
             return True
 
         except Exception as e:
             logger.error(f"❌ Failed to save incomplete call: {e}")
             return False
 
-    async def append_incomplete_call_with_graceful_fallback(self, patient_record: Dict, reason: str = "call_incomplete",
-                                                            call_duration: int = 0, customer_intent_summary: str = "",
-                                                            ai_summary: str = "") -> bool:
-        """Append incomplete call with graceful fallback if sheets not available"""
-        try:
-            if not self.current_spreadsheet:
-                logger.warning("⚠️ No Google Sheets connected - cannot save incomplete call data")
-                logger.info(f"📊 Call data would have been: {patient_record.get('name')} - {reason}")
-                return True  # Don't fail the call process
-
-            # Use existing method if sheets are available
-            return await self.append_incomplete_call(
-                patient_record, reason, call_duration, customer_intent_summary, ai_summary
-            )
-
-        except Exception as e:
-            logger.error(f"❌ Error saving to sheets: {e}")
-            logger.warning("⚠️ Continuing without sheets save to prevent call failure")
-            return True
-
     async def append_call_analysis(self, analysis_data: Dict) -> bool:
-        """Append call analysis to Call_Analysis worksheet"""
+        """Append call analysis to Call_Analysis worksheet with standardized date-time"""
         try:
             logger.info(f"🔍 Saving call analysis for {analysis_data.get('name', 'Unknown')}")
 
@@ -657,25 +681,38 @@ class GoogleSheetsService:
                 )
                 logger.info(f"✅ Created Call_Analysis worksheet")
 
-            # Prepare row data matching headers
+            # Standardize the call date if it's provided
+            call_date = analysis_data.get('date', '')
+            if call_date:
+                # Extract just the date part (YYYY-MM-DD) from full timestamp
+                if ' ' in call_date:
+                    call_date = call_date.split(' ')[0]
+                call_date = datetime_standardizer.standardize_date(call_date)
+
+            # Get standardized timestamp for analysis
+            standard_timestamp = get_current_timestamp_standard()
+
+            # Prepare row data with standardized date-time formats
             row_data = [
                 analysis_data.get('call_id', ''),                        # Call ID
                 analysis_data.get('name', ''),                           # Patient Name
                 analysis_data.get('phone_number', ''),                   # Phone Number
-                analysis_data.get('date', ''),                           # Call Date
+                call_date,                                               # Call Date (YYYY-MM-DD)
                 analysis_data.get('duration', ''),                       # Call Duration
                 analysis_data.get('call_outcome', ''),                   # Call Outcome
                 analysis_data.get('summary', ''),                        # AI Summary
                 analysis_data.get('transcript_count', 0),                # Transcript Count
                 analysis_data.get('outcome_details', ''),                # Outcome Details
-                datetime.now().strftime("%Y-%m-%d %H:%M:%S")             # Analysis Timestamp
+                standard_timestamp                                       # Analysis Timestamp (YYYY-MM-DD HH:MM AM/PM)
             ]
 
             await asyncio.get_event_loop().run_in_executor(
                 self.executor, lambda: worksheet.append_row(row_data)
             )
 
-            logger.info(f"✅ Call analysis saved successfully to Call_Analysis worksheet")
+            logger.info(f"✅ Call analysis saved with standardized date-time format")
+            logger.info(f"   Call Date: {call_date}")
+            logger.info(f"   Analysis Timestamp: {standard_timestamp}")
             return True
 
         except Exception as e:
@@ -712,7 +749,8 @@ class GoogleSheetsService:
             "last_row_count": self.last_row_count,
             "worksheet_name": self.current_sheet.title if self.current_sheet else None,
             "spreadsheet_title": self.current_spreadsheet.title if self.current_spreadsheet else None,
-            "available_worksheets": list(self.worksheets.values())
+            "available_worksheets": list(self.worksheets.values()),
+            "datetime_format": "YYYY-MM-DD HH:MM AM/PM"  # NEW: Indicate standardized format
         }
 
     def __del__(self):

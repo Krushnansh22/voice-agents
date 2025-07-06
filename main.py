@@ -19,6 +19,7 @@ from settings import settings
 import uvicorn
 import warnings
 import openpyxl
+from datetime_standardizer import datetime_standardizer, get_current_timestamp_standard
 
 from openpyxl import Workbook
 import os
@@ -156,20 +157,25 @@ class CallHangupManager:
 # Global instance of CallHangupManager
 hangup_manager = CallHangupManager()
 
+
+def get_standardized_timestamp():
+    """Get current timestamp in standardized format for use throughout the application"""
+    return get_current_timestamp_standard()
+
 # Updated extract_appointment_details function
+# Updated extract_appointment_details function with combined date-time format
 def extract_appointment_details():
-    """Extract appointment details from conversation transcript with enhanced date parsing"""
+    """Extract appointment details from conversation transcript with combined date-time format"""
     full_conversation = " ".join(conversation_transcript)
 
     extracted_info = {
-        "appointment_date": None,
-        "appointment_time": None,
+        "appointment_date": None,  # Will contain combined YYYY-MM-DD HH:MM AM/PM
+        "appointment_time": None,  # Individual time for Time Slot column reference
         "time_slot": None,
         "doctor_name": "डॉ. निशा",
         "raw_conversation": full_conversation,
         "appointment_confirmed": False
     }
-
 
     # Enhanced date patterns - focusing on specific dates/months only
     date_patterns = [
@@ -177,15 +183,15 @@ def extract_appointment_details():
         r'(\d{1,2}\s+(?:जनवरी|फरवरी|मार्च|अप्रैल|मई|जून|जुलाई|अगस्त|सितंबर|अक्टूबर|नवंबर|दिसंबर))',
         r'(\d{1,2}\s+(?:January|February|March|April|May|June|July|August|September|October|November|December))',
         r'(\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec))',
-        
+
         # Standard date formats with separators
         r'(\d{1,2}[-/]\d{1,2}[-/]\d{4})',  # DD-MM-YYYY or DD/MM/YYYY
         r'(\d{4}[-/]\d{1,2}[-/]\d{1,2})',  # YYYY-MM-DD
         r'(\d{1,2}[-/]\d{1,2}[-/]\d{2})',  # DD-MM-YY
-        
+
         # Date with तारीख
         r'(\d{1,2}\s+तारीख)',  # "5 तारीख"
-        
+
         # Month Day format
         r'((?:जनवरी|फरवरी|मार्च|अप्रैल|मई|जून|जुलाई|अगस्त|सितंबर|अक्टूबर|नवंबर|दिसंबर)\s+\d{1,2})',
         r'((?:January|February|March|April|May|June|July|August|September|October|November|December)\s+\d{1,2})',
@@ -199,12 +205,12 @@ def extract_appointment_details():
         r'(\d{1,2}:\d{2})',  # "10:30" (24-hour format)
         r'(\d{1,2}\s*(?:AM|PM|am|pm))',  # "10 AM"
         r'(\d{1,2}\s*(?:बजकर)\s*\d{1,2}\s*(?:मिनट))',  # "10 बजकर 30 मिनट"
-        
+
         # Time periods
         r'(morning|सुबह)',
-        r'(afternoon|दोपहर)', 
+        r'(afternoon|दोपहर)',
         r'(evening|शाम)',
-        
+
         # Specific time slots mentioned by AI
         r'(10\s*(?:बजे|AM|am)\s*से\s*12\s*(?:बजे|PM|pm))',
         r'(2\s*(?:बजे|PM|pm)\s*से\s*4\s*(?:बजे|PM|pm))',
@@ -220,12 +226,6 @@ def extract_appointment_details():
             print(f"📅 Found raw date: '{raw_date}'")
             break
 
-    # Normalize the extracted date
-    if raw_date:
-        normalized_date = normalize_date_enhanced(raw_date)
-        extracted_info["appointment_date"] = normalized_date
-        print(f"📅 Raw date: '{raw_date}' → Normalized: '{normalized_date}'")
-
     # Extract time information
     raw_time = None
     for pattern in time_patterns:
@@ -235,18 +235,46 @@ def extract_appointment_details():
             print(f"⏰ Found raw time: '{raw_time}'")
             break
 
-    if raw_time:
-        normalized_time = normalize_time_enhanced(raw_time)
-        extracted_info["appointment_time"] = normalized_time
-        print(f"⏰ Raw time: '{raw_time}' → Normalized: '{normalized_time}'")
+    # STANDARDIZE the extracted date and time using datetime_standardizer
+    standardized_date = None
+    standardized_time = None
 
-    # Determine time slot based on conversation
+    if raw_date:
+        standardized_date = datetime_standardizer.standardize_date(raw_date)
+        print(f"📅 Raw date: '{raw_date}' → Standardized: '{standardized_date}'")
+
+    if raw_time:
+        standardized_time = datetime_standardizer.standardize_time(raw_time)
+        print(f"⏰ Raw time: '{raw_time}' → Standardized: '{standardized_time}'")
+
+    # CREATE COMBINED DATE-TIME for appointment_date field
+    if standardized_date and standardized_time:
+        # Combine date and time in standardized format: YYYY-MM-DD HH:MM AM/PM
+        extracted_info["appointment_date"] = f"{standardized_date} {standardized_time}"
+        print(f"📅⏰ Combined Appointment Date: '{extracted_info['appointment_date']}'")
+    elif standardized_date:
+        # If only date is available
+        extracted_info["appointment_date"] = standardized_date
+        print(f"📅 Appointment Date (date only): '{extracted_info['appointment_date']}'")
+    else:
+        # No date information found
+        extracted_info["appointment_date"] = None
+        print(f"📅 No appointment date found")
+
+    # SEPARATE TIME for time_slot reference column
+    extracted_info["appointment_time"] = standardized_time
+    if standardized_time:
+        print(f"⏰ Time Slot Reference: '{extracted_info['appointment_time']}'")
+
+    # Determine time slot based on conversation (for time_slot field)
     conversation_lower = full_conversation.lower()
     if any(keyword in conversation_lower for keyword in ['morning', 'सुबह', '10 am', '10 बजे', '11 am', '11 बजे']):
         extracted_info["time_slot"] = "morning"
-    elif any(keyword in conversation_lower for keyword in ['afternoon', 'दोपहर', '2 pm', '2 बजे', '3 pm', '3 बजे', '4 pm', '4 बजे']):
+    elif any(keyword in conversation_lower for keyword in
+             ['afternoon', 'दोपहर', '2 pm', '2 बजे', '3 pm', '3 बजे', '4 pm', '4 बजे']):
         extracted_info["time_slot"] = "afternoon"
-    elif any(keyword in conversation_lower for keyword in ['evening', 'शाम', '5 pm', '5 बजे', '6 pm', '6 बजे', '7 pm', '7 बजे']):
+    elif any(keyword in conversation_lower for keyword in
+             ['evening', 'शाम', '5 pm', '5 बजे', '6 pm', '6 बजे', '7 pm', '7 बजे']):
         extracted_info["time_slot"] = "evening"
 
     # Enhanced confirmation keywords
@@ -264,12 +292,17 @@ def extract_appointment_details():
         "booking.*confirm",
         "slot.*confirm"
     ]
-    
+
     extracted_info["appointment_confirmed"] = any(
         re.search(keyword, full_conversation, re.IGNORECASE) for keyword in confirmation_keywords
     )
 
-    print(f"🔍 Final extracted info: {extracted_info}")
+    print(f"🔍 Final extracted info with combined date-time format:")
+    print(f"   Appointment Date (Combined): '{extracted_info['appointment_date']}'")
+    print(f"   Appointment Time (Reference): '{extracted_info['appointment_time']}'")
+    print(f"   Time Slot: '{extracted_info['time_slot']}'")
+    print(f"   Confirmed: {extracted_info['appointment_confirmed']}")
+
     return extracted_info
 
 
@@ -473,7 +506,7 @@ def detect_reschedule_request():
 
 
 def extract_reschedule_details():
-    """Extract reschedule callback details from conversation with enhanced parsing"""
+    """Extract reschedule callback details from conversation with standardized date-time format"""
     full_conversation = " ".join(conversation_transcript)
 
     callback_info = {
@@ -492,17 +525,17 @@ def extract_reschedule_details():
         r'(\d{1,2}[-/]\d{1,2}[-/]\d{4})',  # DD-MM-YYYY or DD/MM/YYYY
         r'(\d{4}[-/]\d{1,2}[-/]\d{1,2})',  # YYYY-MM-DD
         r'(\d{1,2}[-/]\d{1,2}[-/]\d{2})',  # DD-MM-YY
-        
+
         # Date with month names
         r'(\d{1,2}\s+(?:January|February|March|April|May|June|July|August|September|October|November|December))',
         r'(\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec))',
         r'(\d{1,2}\s+(?:जनवरी|फरवरी|मार्च|अप्रैल|मई|जून|जुलाई|अगस्त|सितंबर|अक्टूबर|नवंबर|दिसंबर))',
-        
+
         # Conversational date formats
         r'(\d{1,2}\s+(?:तारीख|date))',
         r'(\d+\s+(?:दिसंबर|December|दिसम्बर))',
         r'(\d+\s+(?:जनवरी|January))',
-        
+
         # Relative dates
         r'(आज|कल|परसों)',
         r'(tomorrow|today|day\s+after\s+tomorrow)',
@@ -520,7 +553,7 @@ def extract_reschedule_details():
         r'(\d{1,2}\s*(?:AM|PM|am|pm))',
         r'(\d{1,2}\s*बजे)',
         r'(\d{1,2}\s*(?:बजकर)\s*\d{1,2}\s*(?:मिनट))',
-        
+
         # Time periods
         r'(morning|सुबह)',
         r'(afternoon|दोपहर)',
@@ -550,24 +583,33 @@ def extract_reschedule_details():
             callback_info["callback_date"] = raw_date
             break
 
-    # Normalize the date if found
+    # STANDARDIZE the date if found using datetime_standardizer
     if raw_date:
-        normalized_date = normalize_date_enhanced(raw_date)
-        callback_info["normalized_callback_date"] = normalized_date
-        print(f"📅 Reschedule date: '{raw_date}' → Normalized: '{normalized_date}'")
+        standardized_date = datetime_standardizer.standardize_date(raw_date)
+        callback_info["normalized_callback_date"] = standardized_date
+        print(f"📅 Reschedule date: '{raw_date}' → Standardized: '{standardized_date}'")
 
     # Extract time
+    raw_time = None
     for pattern in time_patterns:
         matches = re.findall(pattern, full_conversation, re.IGNORECASE)
         if matches:
-            callback_info["callback_time"] = matches[0]
+            raw_time = matches[0]
+            callback_info["callback_time"] = raw_time
             break
+
+    # STANDARDIZE the time if found using datetime_standardizer
+    if raw_time:
+        standardized_time = datetime_standardizer.standardize_time(raw_time)
+        callback_info["callback_time"] = standardized_time
+        print(f"⏰ Reschedule time: '{raw_time}' → Standardized: '{standardized_time}'")
 
     # Extract day
     for pattern, normalized_day in day_patterns:
         if re.search(pattern, full_conversation, re.IGNORECASE):
             callback_info["callback_day"] = normalized_day
             break
+
     # Extract period
     period_patterns = [
         (r'(सुबह|morning)', 'Morning'),
@@ -594,6 +636,7 @@ def extract_reschedule_details():
         re.search(keyword, full_conversation, re.IGNORECASE) for keyword in reschedule_confirmation_keywords
     )
 
+    print(f"🔍 Final reschedule info with standardized date-time: {callback_info}")
     return callback_info
 
 def detect_reschedule_request():
@@ -844,8 +887,9 @@ async def append_incomplete_call_with_analysis(patient_record: dict, reason: str
         logger.warning("⚠️ Continuing without sheets save to prevent call failure")
         return True
 
+
 async def process_reschedule_outcome():
-    """Process reschedule outcome and save to callback sheet with proper headers"""
+    """Process reschedule outcome and save to callback sheet with standardized date-time"""
     global call_outcome_detected, current_call_uuid, reschedule_state
 
     # Get current record
@@ -858,11 +902,10 @@ async def process_reschedule_outcome():
             'gender': single_call_patient_info.get('gender', '')
         }
     else:
-        #current_record = call_queue_manager.get_current_record()
         if not current_record:
             print(f"❌ No current record available for reschedule processing")
             return
-        
+
         patient_record = {
             'name': current_record.name,
             'phone_number': current_record.phone,
@@ -871,21 +914,23 @@ async def process_reschedule_outcome():
             'gender': current_record.gender
         }
 
-    # Extract reschedule details
-    callback_details = extract_reschedule_details()
-    
+    # Extract reschedule details with standardization
+    callback_details = extract_reschedule_details()  # Now returns standardized date-time
+
     # Check if we have enough details for reschedule
     has_date = callback_details.get("callback_date") or callback_details.get("callback_day")
     has_time = callback_details.get("callback_time") or callback_details.get("callback_period")
 
     if has_date or has_time:  # At least one piece of timing info
-        # Save reschedule request to callback sheet
+        # Save reschedule request to callback sheet with standardized format
         success = await append_reschedule_to_sheets(patient_record, callback_details)
-        
+
         if success:
-            print(f"📅 Reschedule request recorded in callback sheet for {patient_record.get('name', 'Unknown')}")
-            print(f"   Callback Date: {callback_details.get('normalized_callback_date') or callback_details.get('callback_date', 'TBD')}")
-            print(f"   Callback Time: {callback_details.get('callback_time', 'TBD')}")
+            print(
+                f"📅 Reschedule request recorded with standardized date-time for {patient_record.get('name', 'Unknown')}")
+            print(
+                f"   Callback Date: {callback_details.get('normalized_callback_date') or callback_details.get('callback_date', 'TBD')} (YYYY-MM-DD)")
+            print(f"   Callback Time: {callback_details.get('callback_time', 'TBD')} (HH:MM AM/PM)")
             print(f"   Callback Day: {callback_details.get('callback_day', 'TBD')}")
             print(f"   Callback Period: {callback_details.get('callback_period', 'TBD')}")
 
@@ -896,7 +941,7 @@ async def process_reschedule_outcome():
 
             call_outcome_detected = CallResult.RESCHEDULE_REQUESTED
             reschedule_state["reschedule_confirmed"] = True
-            print("📋 Reschedule confirmed - call will terminate after confirmation message")
+            print("📋 Reschedule confirmed with standardized date-time - call will terminate after confirmation message")
             return True
     else:
         print(f"⚠️ No callback timing details provided - saving as general reschedule request")
@@ -911,7 +956,7 @@ async def process_reschedule_outcome():
 
 
 async def process_conversation_outcome():
-    """Process conversation outcome and save to Google Sheets with AI summary"""
+    """Process conversation outcome and save to Google Sheets with standardized date-time"""
     global call_outcome_detected, current_call_uuid, appointment_booked_pending_end
 
     if single_call_patient_info:
@@ -932,10 +977,10 @@ async def process_conversation_outcome():
     }
 
     # Check for appointment booking first
-    appointment_details = extract_appointment_details()
+    appointment_details = extract_appointment_details()  # Now returns standardized date-time
     if appointment_details.get("appointment_confirmed"):
 
-        # ADDED: Generate AI summary for appointment
+        # Generate AI summary for appointment
         ai_summary = ""
         try:
             # Get conversation transcript for summary
@@ -955,16 +1000,16 @@ async def process_conversation_outcome():
             logger.warning(f"⚠️ Could not generate AI summary: {e}")
             ai_summary = "Appointment booked successfully"
 
-        # UPDATED: Pass AI summary to append_appointment
+        # Pass standardized appointment details to Google Sheets
         success = await append_appointment_to_sheets(appointment_details, patient_record, ai_summary)
 
         if success:
-            print(f"✅ Appointment booked for {current_record.name} (Row {current_record.row_number})")
-            print(f"   Date: {appointment_details.get('appointment_date', 'TBD')}")
-            print(f"   Time: {appointment_details.get('appointment_time', 'TBD')}")
+            print(f"✅ Appointment booked for {current_record.name} with standardized date-time")
+            print(f"   Date: {appointment_details.get('appointment_date', 'TBD')} (YYYY-MM-DD format)")
+            print(f"   Time: {appointment_details.get('appointment_time', 'TBD')} (HH:MM AM/PM format)")
             print(f"   Summary: {ai_summary[:100]}...")
 
-            # CRITICAL CHANGE: Mark appointment booked but DON'T move to next record yet
+            # Mark appointment booked but DON'T move to next record yet
             call_outcome_detected = CallResult.APPOINTMENT_BOOKED
             appointment_booked_pending_end = True
 
@@ -975,34 +1020,36 @@ async def process_conversation_outcome():
             )
 
             call_outcome_detected = CallResult.APPOINTMENT_BOOKED
-            print("📋 Appointment confirmed - call will continue to natural ending")
+            print("📋 Appointment confirmed with standardized date-time - call will continue to natural ending")
         return
 
     # Check for reschedule request
     if detect_reschedule_request():
-        callback_details = extract_reschedule_details()
+        callback_details = extract_reschedule_details()  # Now returns standardized date-time
         success = await append_reschedule_to_sheets(patient_record, callback_details)
         if success:
-            print(f"📅 Reschedule request recorded for {current_record.name} (Row {current_record.row_number})")
+            print(f"📅 Reschedule request recorded for {current_record.name} with standardized date-time")
+            print(f"   Callback Date: {callback_details.get('normalized_callback_date', 'TBD')} (YYYY-MM-DD format)")
+            print(f"   Callback Time: {callback_details.get('callback_time', 'TBD')} (HH:MM AM/PM format)")
 
             # Mark in queue manager
             callback_info = f"Preferred: {callback_details.get('callback_day', 'TBD')} {callback_details.get('callback_time', 'TBD')}"
             await call_queue_manager.mark_call_result(CallResult.RESCHEDULE_REQUESTED, callback_info)
 
             call_outcome_detected = CallResult.RESCHEDULE_REQUESTED
-            print("📋 Reschedule detected - call will continue to natural ending")
+            print("📋 Reschedule detected with standardized date-time - call will continue to natural ending")
         return
 
-    print(f"ℹ️ No clear outcome detected yet for {current_record.name} (Row {current_record.row_number})")
+    print(f"ℹ️ No clear outcome detected yet for {current_record.name}")
 
 
 call_analyzer = CallAnalyzer()
 
 
 async def handle_incomplete_call_with_analysis(current_record, reason):
-    """Handle incomplete call with AI analysis for summary and intent"""
+    """Handle incomplete call with AI analysis and standardized timestamp"""
     try:
-        print(f"📝 Processing incomplete call with AI analysis for {current_record.name}")
+        print(f"📝 Processing incomplete call with standardized timestamp for {current_record.name}")
 
         # Calculate call duration
         call_duration = calculate_call_duration()
@@ -1046,7 +1093,7 @@ async def handle_incomplete_call_with_analysis(current_record, reason):
         # Complete the call in queue manager
         await call_queue_manager.complete_current_call(CallResult.CALL_INCOMPLETE, reason_detail)
 
-        # Save to Google Sheets with AI analysis
+        # Save to Google Sheets with AI analysis and standardized timestamp
         patient_record = {
             'name': current_record.name,
             'phone_number': current_record.phone,
@@ -1055,7 +1102,7 @@ async def handle_incomplete_call_with_analysis(current_record, reason):
             'gender': current_record.gender
         }
 
-        # NEW: Use enhanced incomplete call method with AI analysis
+        # Use enhanced incomplete call method with standardized timestamp
         await append_incomplete_call_with_analysis(
             patient_record,
             reason_detail,
@@ -1063,6 +1110,8 @@ async def handle_incomplete_call_with_analysis(current_record, reason):
             ai_summary,
             customer_intent
         )
+
+        print(f"✅ Incomplete call saved with standardized timestamp format")
 
     except Exception as e:
         print(f"❌ Error handling incomplete call analysis: {e}")
