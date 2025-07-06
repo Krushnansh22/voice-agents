@@ -2265,8 +2265,42 @@ async def initiate_single_call(
 ):
     """Initiate a single call with provided patient parameters"""
     try:
+        # Normalize phone number
+        def normalize_phone_number(phone: str) -> str:
+            """
+            Normalize Indian phone numbers to +91 format
+            Examples:
+            - "09823565101" -> "+919823565101"
+            - "9823565101" -> "+919823565101"
+            - "+919823565101" -> "+919823565101" (no change)
+            """
+            # Remove any spaces, dashes, or other non-digit characters except +
+            phone = ''.join(c for c in phone if c.isdigit() or c == '+')
+            
+            # If already starts with +91, return as is
+            if phone.startswith('+91'):
+                return phone
+            
+            # If starts with 0, remove it and add +91
+            if phone.startswith('0') and len(phone) == 11:
+                return '+91' + phone[1:]
+            
+            # If 10 digits without country code, add +91
+            if len(phone) == 10 and phone[0] in '6789':  # Indian mobile numbers start with 6,7,8,9
+                return '+91' + phone
+            
+            # If already has 91 prefix without +, add +
+            if phone.startswith('91') and len(phone) == 12:
+                return '+' + phone
+            
+            # Return as is if none of the above conditions match
+            return phone if phone.startswith('+') else '+91' + phone
+
+        # Normalize the phone number
+        normalized_phone = normalize_phone_number(phone_number)
+        
         # Validate phone number format (basic validation)
-        if not phone_number or len(phone_number) < 10:
+        if not normalized_phone or len(normalized_phone) < 13:  # +91 + 10 digits = 13 chars minimum
             raise HTTPException(status_code=400, detail="Valid phone number required")
 
         # Validate required fields
@@ -2286,7 +2320,7 @@ async def initiate_single_call(
         single_call_record = CallRecord(
             index=0,  # Single call doesn't need index
             name=name,
-            phone=phone_number,
+            phone=normalized_phone,  # Use normalized phone number
             address=address,
             age=age,
             gender=gender
@@ -2300,13 +2334,13 @@ async def initiate_single_call(
         call_queue_manager.total_records = 1
         call_queue_manager._call_in_progress = True
 
-        logger.info(f"📞 Single call request: {name} ({phone_number})")
+        logger.info(f"📞 Single call request: {name} ({normalized_phone})")
 
         try:
             # Create Plivo call
             call_response = plivo_client.calls.create(
                 from_=settings.PLIVO_FROM_NUMBER,
-                to_=phone_number,
+                to_=normalized_phone,  # Use normalized phone number
                 answer_url=settings.PLIVO_ANSWER_XML,
                 answer_method='GET'
             )
@@ -2328,7 +2362,7 @@ async def initiate_single_call(
                 from database.db_service import db_service
                 call_session = await db_service.create_call_session(
                     patient_name=name,
-                    patient_phone=phone_number
+                    patient_phone=normalized_phone  # Use normalized phone number
                 )
                 logger.info(f"✅ Created call session in DB: {call_session.call_id}")
 
@@ -2336,7 +2370,7 @@ async def initiate_single_call(
                 global single_call_patient_info
                 single_call_patient_info = {
                     "name": name,
-                    "phone_number": phone_number,
+                    "phone_number": normalized_phone,  # Use normalized phone number
                     "age": age,
                     "gender": gender,
                     "address": address,
@@ -2349,7 +2383,7 @@ async def initiate_single_call(
 
             logger.info(f"✅ Single call initiated successfully")
             logger.info(f"   Patient: {name}")
-            logger.info(f"   Phone: {phone_number}")
+            logger.info(f"   Phone: {normalized_phone}")
             logger.info(f"   Call UUID: {call_uuid}")
 
             return {
@@ -2358,7 +2392,7 @@ async def initiate_single_call(
                 "data": {
                     "call_uuid": call_uuid,
                     "patient_name": name,
-                    "patient_phone": phone_number,
+                    "patient_phone": normalized_phone,  # Use normalized phone number
                     "patient_age": age,
                     "patient_gender": gender,
                     "patient_address": address,
@@ -2385,7 +2419,6 @@ async def initiate_single_call(
     except Exception as e:
         logger.error(f"❌ Error in single call API: {e}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
-
 
 # Add this helper endpoint to get current call status
 @app.get("/api/single-call/status")
