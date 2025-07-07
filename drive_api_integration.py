@@ -58,13 +58,13 @@ class GoogleDriveNotificationService:
                 logger.info("✅ Using credentials from environment variables")
             else:
                 # Fallback to file-based credentials
-                from settings import settings
-                credentials_file = settings.GOOGLE_SERVICE_ACCOUNT_FILE
-                self.credentials = Credentials.from_service_account_file(
-                    credentials_file,
-                    scopes=scopes
-                )
-                logger.info(f"✅ Using credentials from file: {credentials_file}")
+                # from settings import settings
+                # credentials_file = settings.GOOGLE_SERVICE_ACCOUNT_FILE
+                # self.credentials = Credentials.from_service_account_file(
+                #     credentials_file,
+                #     scopes=scopes
+                # )
+                logger.info(f"Creds issue")
 
             # Initialize services in thread pool
             def _init_services():
