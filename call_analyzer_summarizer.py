@@ -235,31 +235,40 @@ class CallAnalyzer:
 
             prompt = f"""You are analyzing a call transcript from an IVF clinic. The patient's name is {patient_name}.
 
-Please analyze this call transcript and respond with EXACTLY this JSON format (no extra text, no markdown):
+    Please analyze this call transcript and respond with EXACTLY this JSON format (no extra text, no markdown):
 
-{{
-    "call_outcome": "one of: Appointment Booked, Reschedule Requested, Call Incomplete, Not Interested, Follow Up Needed",
-    "Summary": "comprehensive detailed summary of what happened in the call"
-}}
+    {{
+        "call_outcome": "one of: Appointment Booked, Reschedule Requested, Call Incomplete, Not Interested, Follow Up Needed",
+        "Summary": "comprehensive detailed summary of what happened in the call"
+    }}
 
-Guidelines for call_outcome:
-- "Appointment Booked": When a specific appointment is scheduled and confirmed (look for phrases like "slot book कर लिया", "appointment confirm", "बुक हो गया")
-- "Reschedule Requested": When patient asks for callback or different timing (look for "reschedule", "बाद में call", "दूसरे time")
-- "Call Incomplete": When call drops, technical issues, or very short interaction
-- "Not Interested": When patient clearly declines or shows no interest
-- "Follow Up Needed": When more information or future contact is required
+    Guidelines for call_outcome:
+    - "Appointment Booked": When a specific appointment is scheduled and confirmed (look for phrases like "slot book कर लिया", "appointment confirm", "बुक हो गया")
+    - "Reschedule Requested": When patient asks for callback or different timing (look for "reschedule", "बाद में call", "दूसरे time")
+    - "Call Incomplete": When call drops, technical issues, or very short interaction
+    - "Not Interested": When patient clearly declines or shows no interest
+    - "Follow Up Needed": When more information or future contact is required
 
-For the Summary, include:
-- Purpose of the call
-- Patient's main concerns or questions
-- Any medical information discussed
-- Outcome of the conversation
-- Next steps if any
+    IMPORTANT: For the Summary field, ALWAYS provide a conversational summary of what happened during the call, NOT structured data or appointment details.
 
-CALL TRANSCRIPT:
-{transcript}
+    For the Summary, include:
+    - How the call started and who initiated it
+    - What the patient's main concerns or questions were
+    - Key points discussed during the conversation
+    - Any medical information or advice shared
+    - How the call concluded
+    - If an appointment was booked, mention it naturally in the summary (e.g., "Patient agreed to book an appointment for next week") but DO NOT provide structured appointment details like dates/times
 
-Respond with ONLY the JSON format above:"""
+    Example of GOOD Summary for appointment booking:
+    "Patient called regarding fertility consultation. Discussed their concerns about conceiving after 2 years of trying. Explained the IVF process and available treatments. Patient showed interest and agreed to book an appointment for initial consultation. Call ended positively with patient expressing gratitude for the information provided."
+
+    Example of BAD Summary (DO NOT DO THIS):
+    "Date: 2025-07-12 10:00 AM, Time: 10:00 AM"
+
+    CALL TRANSCRIPT:
+    {transcript}
+
+    Respond with ONLY the JSON format above:"""
 
             logger.info(f"🤖 Sending prompt to Gemini (transcript length: {len(transcript)})")
 

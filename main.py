@@ -1298,36 +1298,42 @@ async def terminate_call_gracefully(websocket, realtime_ai_ws, reason="completed
             except Exception as e:
                 print(f"❌ Error during call analysis: {e}")
 
-        # Handle call outcome with enhanced queue manager
-        current_record = call_queue_manager.get_current_record()
-        if current_record:
-            if call_outcome_detected and appointment_booked_pending_end:
-                # Appointment was booked - now that call ended naturally, move to next
-                print(f"✅ Appointment booked call ended naturally - now moving to next record")
+        # FIXED: Handle single calls vs queue calls differently
+        if single_call_patient_info:
+            # This is a single call - just clean up the state
+            print(f"📞 Single call ended gracefully - cleaning up state")
+            await _cleanup_single_call_state()
+        else:
+            # Handle call outcome with enhanced queue manager (existing queue logic)
+            current_record = call_queue_manager.get_current_record()
+            if current_record:
+                if call_outcome_detected and appointment_booked_pending_end:
+                    # Appointment was booked - now that call ended naturally, move to next
+                    print(f"✅ Appointment booked call ended naturally - now moving to next record")
 
-                if call_queue_manager._stop_after_current_call or call_queue_manager._should_stop:
-                    print("🛑 Queue is stopping - not moving to next record")
-                    current_record.status = call_outcome_detected
-                    call_queue_manager._call_in_progress = False
-                else:
-                    await call_queue_manager.move_to_next_record()
+                    if call_queue_manager._stop_after_current_call or call_queue_manager._should_stop:
+                        print("🛑 Queue is stopping - not moving to next record")
+                        current_record.status = call_outcome_detected
+                        call_queue_manager._call_in_progress = False
+                    else:
+                        await call_queue_manager.move_to_next_record()
 
-                appointment_booked_pending_end = False
+                    appointment_booked_pending_end = False
 
-            elif call_outcome_detected and call_outcome_detected == CallResult.RESCHEDULE_REQUESTED:
-                # Reschedule was requested - move to next
-                print(f"✅ Reschedule request call ended naturally - now moving to next record")
+                elif call_outcome_detected and call_outcome_detected == CallResult.RESCHEDULE_REQUESTED:
+                    # Reschedule was requested - move to next
+                    print(f"✅ Reschedule request call ended naturally - now moving to next record")
 
-                if call_queue_manager._stop_after_current_call or call_queue_manager._should_stop:
-                    print("🛑 Queue is stopping - not moving to next record")
-                    current_record.status = call_outcome_detected
-                    call_queue_manager._call_in_progress = False
-                else:
-                    await call_queue_manager.move_to_next_record()
+                    if call_queue_manager._stop_after_current_call or call_queue_manager._should_stop:
+                        print("🛑 Queue is stopping - not moving to next record")
+                        current_record.status = call_outcome_detected
+                        call_queue_manager._call_in_progress = False
+                    else:
+                        await call_queue_manager.move_to_next_record()
 
-            elif not call_outcome_detected:
-                # No outcome was detected - handle as incomplete call with AI analysis
-                await handle_incomplete_call_with_analysis(current_record, reason)
+                elif not call_outcome_detected:
+                    # No outcome was detected - handle as incomplete call with AI analysis
+                    await handle_incomplete_call_with_analysis(current_record, reason)
 
         # Reset global flags - UPDATED to include timer flags
         current_call_session = None
@@ -1338,12 +1344,9 @@ async def terminate_call_gracefully(websocket, realtime_ai_ws, reason="completed
         call_timer_active = False  # ADDED: Reset timer flag
         call_start_time = None  # ADDED: Reset start time
 
-        # Reset queue manager state
-        call_queue_manager._call_in_progress = False
-
-        # Clear single call patient info
-        global single_call_patient_info
-        single_call_patient_info = None
+        # FIXED: Only reset queue manager state if it's NOT a single call
+        if not single_call_patient_info:
+            call_queue_manager._call_in_progress = False
 
         print(f"🎯 Call termination completed successfully. Reason: {reason}")
         print(f"🎯 Timer state reset for next call")
@@ -1357,8 +1360,13 @@ async def terminate_call_gracefully(websocket, realtime_ai_ws, reason="completed
         call_timer_active = False  # ADDED: Reset timer flag on error
         call_start_time = None  # ADDED: Reset start time on error
 
-        if call_queue_manager.get_current_record():
-            await call_queue_manager.complete_current_call(CallResult.CALL_FAILED, f"Error: {str(e)}")
+        # FIXED: Ensure cleanup on error for both single calls and queue calls
+        if single_call_patient_info:
+            await _cleanup_single_call_state()
+        else:
+            call_queue_manager._call_in_progress = False
+            if call_queue_manager.get_current_record():
+                await call_queue_manager.complete_current_call(CallResult.CALL_FAILED, f"Error: {str(e)}")
 
 # Optional: Add an API endpoint to view call analysis data
 @app.get("/api/call-analysis")
@@ -1654,6 +1662,8 @@ async def _handle_unanswered_single_call(phone_number: str, patient_name: str) -
 
     except Exception as e:
         logger.error(f"❌ Error handling unanswered single call: {e}")
+        # ADDED: Ensure cleanup even on error
+        await _cleanup_single_call_state()
 
 
 async def _cleanup_single_call_state() -> None:
@@ -2717,8 +2727,8 @@ async def initiate_single_call(
         except Exception as plivo_error:
             logger.error(f"❌ Plivo call failed: {plivo_error}")
 
-            # Reset call in progress flag on failure
-            call_queue_manager._call_in_progress = False
+            # FIXED: Reset call in progress flag on failure and clean up state
+            await _cleanup_single_call_state()
             single_call_record.status = CallResult.CALL_FAILED
             single_call_record.result_details = str(plivo_error)
 
@@ -2743,7 +2753,8 @@ async def initiate_single_call(
             except:
                 pass
 
-        call_queue_manager._call_in_progress = False
+        # FIXED: Use the cleanup function instead of direct assignment
+        await _cleanup_single_call_state()
 
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
@@ -3207,8 +3218,13 @@ async def handle_unexpected_disconnection():
             customer_intent=customer_intent
         )
 
-        # Update queue manager if not single call
-        if not single_call_patient_info:
+        #  FIXED: Handle single calls vs queue calls differently
+        if single_call_patient_info:
+            # This is a single call - clean up state
+            print(f"📞 Single call disconnected unexpectedly - cleaning up state")
+            await _cleanup_single_call_state()
+        else:
+            # Update queue manager for queue calls
             current_record = call_queue_manager.get_current_record()
             if current_record:
                 await call_queue_manager.complete_current_call(
@@ -3220,6 +3236,11 @@ async def handle_unexpected_disconnection():
 
     except Exception as e:
         print(f"❌ Error handling unexpected disconnection: {e}")
+        # ADDED: Ensure cleanup even on error
+        if single_call_patient_info:
+            await _cleanup_single_call_state()
+        else:
+            call_queue_manager._call_in_progress = False
 
 
 

@@ -995,30 +995,7 @@ class EnhancedCallQueueManager:
         except Exception as e:
             logger.error(f"Error checking call session: {e}")
             return False
-        """Make the actual call via webhook to Plivo"""
-        try:
-            logger.info(f"📞 Initiating call to {record.name} ({record.phone}) from Google Sheets row {record.row_number}")
 
-            async with httpx.AsyncClient(timeout=60.0) as client:
-                webhook_url = f"{settings.HOST_URL}/webhook"
-                logger.info(f"🔗 Calling webhook: {webhook_url}")
-
-                response = await client.post(webhook_url, headers={
-                    "Content-Type": "application/json"
-                })
-
-            if response.status_code == 200:
-                response_data = response.json()
-                logger.info(f"✅ Webhook response: {response_data}")
-                return True
-            else:
-                logger.error(f"❌ Webhook failed - Status: {response.status_code}, Response: {response.text}")
-                return False
-
-        except Exception as e:
-            logger.error(f"❌ Exception during webhook call: {e}")
-            return False
-        
     async def _make_actual_call(self, record):
         """Make the actual call via webhook to Plivo"""
         try:
