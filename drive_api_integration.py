@@ -280,8 +280,6 @@ class GoogleDriveNotificationService:
                     logger.warning(f"⚠️ Missing required header: {header}")
                     return False
 
-            # TODO: Header/HMAC validation(not required yet)
-
             return True
 
         except Exception as e:
