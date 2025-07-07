@@ -60,6 +60,10 @@ call_start_time = None
 call_timer_active = False
 call_outcome_detected = False
 
+single_call_timer_task = None
+single_call_timer_active = False
+single_call_start_time = None
+
 app = FastAPI()
 
 # Global flags for call queue manager checks
@@ -1474,6 +1478,206 @@ async def stop_call_timer():
         print(f"❌ Error stopping call timer: {e}")
 
 
+async def start_single_call_timer(phone_number: str, patient_name: str, duration: int = 30) -> None:
+    """
+    Start a timer specifically for single calls to detect unanswered calls
+    This runs independently of the WebSocket connection
+    """
+    global single_call_timer_task, single_call_timer_active, single_call_start_time
+
+    try:
+        # Cancel any existing single call timer
+        if single_call_timer_task and not single_call_timer_task.done():
+            logger.info(f"⏰ Cancelling existing single call timer")
+            single_call_timer_task.cancel()
+            try:
+                await single_call_timer_task
+            except asyncio.CancelledError:
+                logger.info(f"✅ Previous single call timer cancelled")
+
+        # Reset timer state
+        single_call_start_time = time.time()
+        single_call_timer_active = True
+
+        logger.info(f"⏰ Starting single call timer for {patient_name} ({phone_number}) - {duration}s timeout")
+
+        # Create new timer task
+        single_call_timer_task = asyncio.create_task(
+            _single_call_timer_countdown(phone_number, patient_name, duration)
+        )
+
+    except Exception as e:
+        logger.error(f"❌ Error starting single call timer: {e}")
+        single_call_timer_active = False
+
+
+async def _single_call_timer_countdown(phone_number: str, patient_name: str, duration: int) -> None:
+    """Internal countdown function for single call timer"""
+    global single_call_timer_active, single_call_patient_info
+
+    try:
+        logger.info(f"⏰ Single call timer countdown started for {patient_name} - {duration}s")
+        await asyncio.sleep(duration)
+
+        if single_call_timer_active:
+            logger.warning(f"⏰ Single call timeout reached for {patient_name} - call not answered")
+
+            # Check if WebSocket connection was ever established
+            websocket_established = await _check_if_websocket_connected()
+
+            if not websocket_established:
+                logger.info(f"📵 No WebSocket connection detected - call was not answered by {patient_name}")
+
+                # Handle as unanswered single call
+                await _handle_unanswered_single_call(phone_number, patient_name)
+            else:
+                logger.info(f"✅ WebSocket was established for {patient_name} - call was answered")
+        else:
+            logger.info(f"⏰ Single call timer expired but was already deactivated for {patient_name}")
+
+    except asyncio.CancelledError:
+        logger.info(f"⏰ Single call timer cancelled for {patient_name}")
+        single_call_timer_active = False
+    except Exception as e:
+        logger.error(f"❌ Error in single call timer countdown: {e}")
+        single_call_timer_active = False
+
+
+async def stop_single_call_timer() -> None:
+    """Stop and clean up the single call timer"""
+    global single_call_timer_task, single_call_timer_active, single_call_start_time
+
+    try:
+        single_call_timer_active = False
+
+        if single_call_timer_task and not single_call_timer_task.done():
+            logger.info(f"⏰ Stopping single call timer")
+            single_call_timer_task.cancel()
+            try:
+                await single_call_timer_task
+            except asyncio.CancelledError:
+                logger.info("✅ Single call timer cancelled successfully")
+
+        # Reset timer variables
+        single_call_timer_task = None
+        single_call_start_time = None
+        logger.info(f"⏰ Single call timer state reset")
+
+    except Exception as e:
+        logger.error(f"❌ Error stopping single call timer: {e}")
+
+
+async def _check_if_websocket_connected() -> bool:
+    """Check if WebSocket connection was established for the call"""
+    try:
+        # Check if current_call_session exists (created in WebSocket handler)
+        global current_call_session
+        if current_call_session and hasattr(current_call_session, 'call_id'):
+            logger.info(f"✅ WebSocket connection detected - call session exists: {current_call_session.call_id}")
+            return True
+
+        # Check media stream connection flag
+        global media_stream_connected
+        if media_stream_connected:
+            logger.info(f"✅ WebSocket connection detected - media stream flag is True")
+            return True
+
+        # Check conversation transcript
+        global conversation_transcript
+        if conversation_transcript and len(conversation_transcript) > 0:
+            logger.info(f"✅ WebSocket connection detected - conversation transcript exists")
+            return True
+
+        logger.info(f"❌ No WebSocket connection detected")
+        return False
+
+    except Exception as e:
+        logger.error(f"Error checking WebSocket connection: {e}")
+        return False
+
+
+async def _handle_unanswered_single_call(phone_number: str, patient_name: str) -> None:
+    """Handle a single call that was not answered"""
+    try:
+        global single_call_patient_info
+
+        logger.info(f"📞 Processing unanswered single call: {patient_name} ({phone_number})")
+
+        if not single_call_patient_info:
+            logger.error(f"❌ No single call patient info available")
+            return
+
+        # Calculate call duration
+        call_duration = 0
+        if single_call_start_time:
+            call_duration = int(time.time() - single_call_start_time)
+
+        # Prepare patient record for Google Sheets
+        patient_record = {
+            'name': single_call_patient_info['name'],
+            'phone_number': single_call_patient_info['phone_number'],
+            'address': single_call_patient_info.get('address', ''),
+            'age': single_call_patient_info.get('age', ''),
+            'gender': single_call_patient_info.get('gender', '')
+        }
+
+        # Save to incomplete calls sheet
+        from google_sheets_service import google_sheets_service
+
+        success = await google_sheets_service.append_incomplete_call(
+            patient_record,
+            reason="Not Picked-up",
+            call_duration=call_duration,
+            customer_intent_summary="Single call - not answered",
+            ai_summary=f"Single call to {patient_name} was not answered within timeout period"
+        )
+
+        if success:
+            logger.info(f"✅ Unanswered single call saved to incomplete calls: {patient_name}")
+        else:
+            logger.error(f"❌ Failed to save unanswered single call: {patient_name}")
+
+        # Try to hangup the call if it's still active
+        try:
+            global current_call_uuid
+            if current_call_uuid and current_call_uuid != 'unknown':
+                from settings import settings
+                import plivo
+                plivo_client = plivo.RestClient(settings.PLIVO_AUTH_ID, settings.PLIVO_AUTH_TOKEN)
+                plivo_client.calls.hangup(call_uuid=current_call_uuid)
+                logger.info(f"📞 Hung up unanswered call: {current_call_uuid}")
+        except Exception as hangup_error:
+            logger.warning(f"⚠️ Could not hangup call: {hangup_error}")
+
+        # Clean up single call state
+        await _cleanup_single_call_state()
+
+    except Exception as e:
+        logger.error(f"❌ Error handling unanswered single call: {e}")
+
+
+async def _cleanup_single_call_state() -> None:
+    """Clean up single call state variables"""
+    try:
+        global single_call_patient_info, current_call_uuid, current_call_session
+        global single_call_timer_active, single_call_start_time
+
+        # Reset single call variables
+        single_call_patient_info = None
+        current_call_uuid = None
+        current_call_session = None
+        single_call_timer_active = False
+        single_call_start_time = None
+
+        # Reset queue manager state
+        call_queue_manager._call_in_progress = False
+
+        logger.info(f"🧹 Single call state cleaned up")
+
+    except Exception as e:
+        logger.error(f"❌ Error cleaning up single call state: {e}")
+
+
 def calculate_call_duration():
     """Calculate call duration in seconds"""
     global call_start_time
@@ -2471,8 +2675,7 @@ async def initiate_single_call(
             global current_call_uuid
             current_call_uuid = call_uuid
 
-            # FIXED: Only create ONE call session - don't create here since media stream will create it
-            # Instead, store the patient info globally for media stream to use
+            # Store the patient info globally for media stream to use
             global single_call_patient_info
             single_call_patient_info = {
                 "name": name,
@@ -2482,15 +2685,20 @@ async def initiate_single_call(
                 "address": address
             }
 
-            logger.info(f"✅ Single call initiated successfully")
+            # ⭐ NEW: Start single call timer immediately after Plivo call creation
+            logger.info(f"⏰ Starting timer for single call detection")
+            await start_single_call_timer(normalized_phone, name, duration=35)
+
+            logger.info(f"✅ Single call initiated successfully with timer")
             logger.info(f"   Patient: {name}")
             logger.info(f"   Phone: {normalized_phone}")
             logger.info(f"   Call UUID: {call_uuid}")
+            logger.info(f"   Timer: Active (35s timeout)")
             logger.info(f"   Sheets Connected: {sheets_connected}")
 
             return {
                 "status": "success",
-                "message": "Call initiated successfully",
+                "message": "Call initiated successfully with timer",
                 "data": {
                     "call_uuid": call_uuid,
                     "patient_name": name,
@@ -2499,6 +2707,8 @@ async def initiate_single_call(
                     "patient_gender": gender,
                     "patient_address": address,
                     "call_status": "initiated",
+                    "timer_active": True,
+                    "timeout_seconds": 35,
                     "sheets_connected": sheets_connected,
                     "timestamp": datetime.now().isoformat()
                 }
@@ -2512,6 +2722,10 @@ async def initiate_single_call(
             single_call_record.status = CallResult.CALL_FAILED
             single_call_record.result_details = str(plivo_error)
 
+            # Stop timer if it was started
+            if single_call_timer_active:
+                await stop_single_call_timer()
+
             raise HTTPException(
                 status_code=500,
                 detail=f"Failed to initiate call: {str(plivo_error)}"
@@ -2521,7 +2735,18 @@ async def initiate_single_call(
         raise
     except Exception as e:
         logger.error(f"❌ Error in single call API: {e}")
+
+        # Cleanup on unexpected error
+        if single_call_timer_active:
+            try:
+                await stop_single_call_timer()
+            except:
+                pass
+
+        call_queue_manager._call_in_progress = False
+
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
 
 # Add this helper endpoint to get current call status
 @app.get("/api/single-call/status")
@@ -2564,6 +2789,10 @@ async def handle_media_stream(websocket: WebSocket):
     global call_timer_task, call_timer_active  # ADDED: Timer globals
 
     await websocket.accept()
+
+    if single_call_timer_active:
+        logger.info(f"✅ WebSocket connected - stopping single call timer (call was answered)")
+        await stop_single_call_timer()
 
     # Reset ALL flags and state for new call
     call_terminated_gracefully = False
