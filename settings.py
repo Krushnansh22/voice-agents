@@ -16,7 +16,7 @@ class Settings(BaseSettings):
     # Azure OpenAI Configuration
     AZURE_OPENAI_API_KEY_P: str
     AZURE_OPENAI_API_ENDPOINT_P: str
-    GEMINI_API_KEY:str
+    GEMINI_API_KEY: str
 
     # Server Configuration
     HOST_URL: str
@@ -31,8 +31,22 @@ class Settings(BaseSettings):
     MONGODB_URL: str
     MONGODB_DATABASE: str = "voice_assistant_db"
 
+    # Google Service Account Configuration (from environment variables)
+    GOOGLE_SERVICE_ACCOUNT_TYPE: str = "service_account"
+    GOOGLE_PROJECT_ID: str
+    GOOGLE_PRIVATE_KEY_ID: str
+    GOOGLE_PRIVATE_KEY: str
+    GOOGLE_CLIENT_EMAIL: str
+    GOOGLE_CLIENT_ID: str
+    GOOGLE_AUTH_URI: str = "https://accounts.google.com/o/oauth2/auth"
+    GOOGLE_TOKEN_URI: str = "https://oauth2.googleapis.com/token"
+    GOOGLE_AUTH_PROVIDER_X509_CERT_URL: str = "https://www.googleapis.com/oauth2/v1/certs"
+    GOOGLE_CLIENT_X509_CERT_URL: str
+    GOOGLE_UNIVERSE_DOMAIN: str = "googleapis.com"
+
     # Google Sheets Configuration
-    GOOGLE_SERVICE_ACCOUNT_FILE: str = "credentials.json"  # Path to service account JSON file
+    GOOGLE_SERVICE_ACCOUNT_FILE: str = "credentials.json"  # Path to service account JSON file (fallback)
+    DEFAULT_SHEET_ID: str
 
     # Call Management Settings
     MAX_CALL_DURATION: int = 600  # 10 minutes max call duration
@@ -59,11 +73,25 @@ class Settings(BaseSettings):
     INCOMPLETE_CALLS_FILE: str = "Incomplete_Calls.xlsx"
     NOT_INTERESTED_CALLS_FILE: str = "Not_Interested_Calls.xlsx"
 
-    DEFAULT_SHEET_ID: str
-
     # Security Settings
     ENABLE_CALL_RECORDING: bool = True
     ENCRYPT_PATIENT_DATA: bool = True
+
+    def get_google_credentials_dict(self) -> dict:
+        """Get Google service account credentials as a dictionary"""
+        return {
+            "type": self.GOOGLE_SERVICE_ACCOUNT_TYPE,
+            "project_id": self.GOOGLE_PROJECT_ID,
+            "private_key_id": self.GOOGLE_PRIVATE_KEY_ID,
+            "private_key": self.GOOGLE_PRIVATE_KEY.replace('\\n', '\n'),  # Handle newlines in private key
+            "client_email": self.GOOGLE_CLIENT_EMAIL,
+            "client_id": self.GOOGLE_CLIENT_ID,
+            "auth_uri": self.GOOGLE_AUTH_URI,
+            "token_uri": self.GOOGLE_TOKEN_URI,
+            "auth_provider_x509_cert_url": self.GOOGLE_AUTH_PROVIDER_X509_CERT_URL,
+            "client_x509_cert_url": self.GOOGLE_CLIENT_X509_CERT_URL,
+            "universe_domain": self.GOOGLE_UNIVERSE_DOMAIN
+        }
 
     class Config:
         env_file = ".env"

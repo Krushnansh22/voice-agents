@@ -1,6 +1,7 @@
 """
 Google Drive API Integration with Push Notifications
 Real-time monitoring of Google Sheets changes using official Google Drive API
+Updated to use environment variables for credentials
 """
 import asyncio
 import logging
@@ -21,8 +22,8 @@ logger = logging.getLogger(__name__)
 class GoogleDriveNotificationService:
     """Service for managing Google Drive push notifications"""
 
-    def __init__(self, credentials_file: str = "credentials.json"):
-        self.credentials_file = credentials_file
+    def __init__(self, credentials_dict: dict = None):
+        self.credentials_dict = credentials_dict
         self.sheets_client = None
         self.drive_service = None
         self.credentials = None
@@ -48,10 +49,22 @@ class GoogleDriveNotificationService:
                 "https://www.googleapis.com/auth/drive.metadata"
             ]
 
-            self.credentials = Credentials.from_service_account_file(
-                self.credentials_file,
-                scopes=scopes
-            )
+            if self.credentials_dict:
+                # Use credentials from environment variables
+                self.credentials = Credentials.from_service_account_info(
+                    self.credentials_dict,
+                    scopes=scopes
+                )
+                logger.info("✅ Using credentials from environment variables")
+            else:
+                # Fallback to file-based credentials
+                from settings import settings
+                credentials_file = settings.GOOGLE_SERVICE_ACCOUNT_FILE
+                self.credentials = Credentials.from_service_account_file(
+                    credentials_file,
+                    scopes=scopes
+                )
+                logger.info(f"✅ Using credentials from file: {credentials_file}")
 
             # Initialize services in thread pool
             def _init_services():
@@ -267,8 +280,7 @@ class GoogleDriveNotificationService:
                     logger.warning(f"⚠️ Missing required header: {header}")
                     return False
 
-            # For production, implement HMAC signature validation here
-            # For development, basic header validation is sufficient
+            # TODO: Header/HMAC validation(not required yet)
 
             return True
 
@@ -344,7 +356,8 @@ class GoogleDriveNotificationService:
                 "service_initialized": self.drive_service is not None,
                 "webhook_url": self.webhook_url,
                 "active_channels": len(self.active_channels),
-                "channels": channels_info
+                "channels": channels_info,
+                "credentials_source": "environment_variables" if self.credentials_dict else "file"
             }
 
         except Exception as e:
@@ -357,5 +370,16 @@ class GoogleDriveNotificationService:
             self.executor.shutdown(wait=False)
 
 
+# Initialize global instance with credentials from settings
+def create_drive_notification_service():
+    """Factory function to create drive notification service with proper credentials"""
+    try:
+        from settings import settings
+        credentials_dict = settings.get_google_credentials_dict()
+        return GoogleDriveNotificationService(credentials_dict=credentials_dict)
+    except Exception as e:
+        logger.warning(f"⚠️ Could not load credentials from environment, falling back to file: {e}")
+        return GoogleDriveNotificationService()
+
 # Global instance
-drive_notification_service = GoogleDriveNotificationService()
+drive_notification_service = create_drive_notification_service()

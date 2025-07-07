@@ -1,6 +1,7 @@
 """
 Updated Google Sheets Service with Date-Time Standardization
 All dates and times are now standardized to YYYY-MM-DD HH:MM AM/PM format
+Updated to use environment variables for credentials
 """
 import asyncio
 import logging
@@ -19,8 +20,8 @@ logger = logging.getLogger(__name__)
 class GoogleSheetsService:
     """Enhanced Google Sheets service with standardized date-time formats"""
 
-    def __init__(self, credentials_file: str = "credentials.json"):
-        self.credentials_file = credentials_file
+    def __init__(self, credentials_dict: dict = None):
+        self.credentials_dict = credentials_dict
         self.client = None
         self.current_spreadsheet = None
         self.current_sheet = None
@@ -68,7 +69,6 @@ class GoogleSheetsService:
             ]
         }
 
-    # [Previous initialization and connection methods remain the same]
     async def initialize(self) -> bool:
         """Initialize Google Sheets client"""
         try:
@@ -77,10 +77,22 @@ class GoogleSheetsService:
                 "https://www.googleapis.com/auth/drive"
             ]
 
-            creds = Credentials.from_service_account_file(
-                self.credentials_file,
-                scopes=scopes
-            )
+            if self.credentials_dict:
+                # Use credentials from environment variables
+                creds = Credentials.from_service_account_info(
+                    self.credentials_dict,
+                    scopes=scopes
+                )
+                logger.info("✅ Using credentials from environment variables")
+            else:
+                # Fallback to file-based credentials
+                from settings import settings
+                credentials_file = settings.GOOGLE_SERVICE_ACCOUNT_FILE
+                creds = Credentials.from_service_account_file(
+                    credentials_file,
+                    scopes=scopes
+                )
+                logger.info(f"✅ Using credentials from file: {credentials_file}")
 
             self.client = await asyncio.get_event_loop().run_in_executor(
                 self.executor, lambda: gspread.authorize(creds)
@@ -153,7 +165,6 @@ class GoogleSheetsService:
                 "error": str(e)
             }
 
-    # [Other connection and validation methods remain the same]
     async def _setup_drive_monitoring(self) -> bool:
         """Setup Google Drive API monitoring for real-time updates"""
         try:
@@ -451,8 +462,7 @@ class GoogleSheetsService:
                 combined_appointment_datetime = ""  # Empty if no date
 
             # Keep original time for "Time Slot" column (for backward compatibility/reference)
-            time_slot_value = standardized_details.get('appointment_time', '') or standardized_details.get('time_slot',
-                                                                                                           '')
+            time_slot_value = standardized_details.get('appointment_time', '') or standardized_details.get('time_slot', '')
 
             # Get standardized timestamp
             standard_timestamp = get_current_timestamp_standard()
@@ -750,7 +760,8 @@ class GoogleSheetsService:
             "worksheet_name": self.current_sheet.title if self.current_sheet else None,
             "spreadsheet_title": self.current_spreadsheet.title if self.current_spreadsheet else None,
             "available_worksheets": list(self.worksheets.values()),
-            "datetime_format": "YYYY-MM-DD HH:MM AM/PM"  # NEW: Indicate standardized format
+            "datetime_format": "YYYY-MM-DD HH:MM AM/PM",  # NEW: Indicate standardized format
+            "credentials_source": "environment_variables" if self.credentials_dict else "file"
         }
 
     def __del__(self):
@@ -759,5 +770,16 @@ class GoogleSheetsService:
             self.executor.shutdown(wait=False)
 
 
+# Initialize global instance with credentials from settings
+def create_google_sheets_service():
+    """Factory function to create Google Sheets service with proper credentials"""
+    try:
+        from settings import settings
+        credentials_dict = settings.get_google_credentials_dict()
+        return GoogleSheetsService(credentials_dict=credentials_dict)
+    except Exception as e:
+        logger.warning(f"⚠️ Could not load credentials from environment, falling back to file: {e}")
+        return GoogleSheetsService()
+
 # Global instance
-google_sheets_service = GoogleSheetsService()
+google_sheets_service = create_google_sheets_service()
