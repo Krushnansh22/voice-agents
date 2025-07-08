@@ -14,6 +14,8 @@ from settings import settings
 logging.basicConfig(level=logging.INFO, format='%(levelname)s:%(name)s:%(message)s')
 logger = logging.getLogger(__name__)
 
+# Global variable to store AI summaries
+AI_SUMMARIES_CACHE = {}
 
 # Replicate the CallResult enum from queue manager
 class CallResult(Enum):
@@ -49,32 +51,78 @@ class CallAnalyzer:
         self.sheets_service = sheets_service
         logger.info("✅ Google Sheets service injected into Call Analyzer")
 
+    def get_cached_summary(self, call_id: str) -> Optional[Dict]:
+        """Get cached AI summary for a call_id"""
+        cached_summary = AI_SUMMARIES_CACHE.get(call_id)
+        if cached_summary:
+            logger.info(f"💾 Found cached summary for call_id: {call_id}")
+            return cached_summary
+        return None
+
+    def cache_summary(self, call_id: str, summary: str, call_outcome: str):
+        """Cache AI summary for a call_id"""
+        AI_SUMMARIES_CACHE[call_id] = {
+            'summary': summary,
+            'call_outcome': call_outcome,
+            'timestamp': datetime.now()
+        }
+        logger.info(f"💾 Cached summary for call_id: {call_id}")
+
+    def clear_cache(self):
+        """Clear the AI summaries cache"""
+        global AI_SUMMARIES_CACHE
+        AI_SUMMARIES_CACHE.clear()
+        logger.info("🗑️ AI summaries cache cleared")
+
+    def get_cache_stats(self) -> Dict:
+        """Get statistics about the current cache"""
+        return {
+            'total_cached_summaries': len(AI_SUMMARIES_CACHE),
+            'call_ids': list(AI_SUMMARIES_CACHE.keys()),
+            'cache_size_mb': len(str(AI_SUMMARIES_CACHE)) / (1024 * 1024)
+        }
+
     async def analyze_call(self, call_data: Dict) -> Optional[Dict]:
         """Analyze a call and return summary"""
         try:
-            logger.info(f"🔍 Analyzing call: {call_data['call_id']}")
+            call_id = call_data['call_id']
+            logger.info(f"🔍 Analyzing call: {call_id}")
             logger.info(f"📝 Transcript length: {len(call_data.get('transcript', ''))}")
 
             # Calculate duration
             duration = (call_data['end_time'] - call_data['start_time']).total_seconds()
             duration_str = str(timedelta(seconds=int(duration)))
 
-            # ALWAYS generate AI summary regardless of pre-determined outcome
-            logger.info("🤖 Generating AI summary with Gemini...")
-            gemini_response = await self.generate_ai_summary(
-                call_data['transcript'],
-                call_data['patient_name']
-            )
+            # Check if we have cached summary for this call_id
+            cached_summary = self.get_cached_summary(call_id)
+            
+            if cached_summary:
+                logger.info(f"✅ Using cached AI summary for call_id: {call_id}")
+                ai_generated_summary = cached_summary['summary']
+                ai_generated_outcome = cached_summary['call_outcome']
+                
+                logger.info(f"💾 Cached outcome: {ai_generated_outcome}")
+                logger.info(f"💾 Cached summary: {ai_generated_summary[:100]}...")
+            else:
+                # Generate new AI summary
+                logger.info("🤖 Generating new AI summary with Gemini...")
+                gemini_response = await self.generate_ai_summary(
+                    call_data['transcript'],
+                    call_data['patient_name']
+                )
 
-            logger.info(f"🤖 Raw Gemini response: {gemini_response}")
+                logger.info(f"🤖 Raw Gemini response: {gemini_response}")
 
-            # Parse the Gemini response format
-            parsed_result = self.parse_gemini_response(gemini_response)
-            ai_generated_summary = parsed_result['summary']
-            ai_generated_outcome = parsed_result['call_outcome']
+                # Parse the Gemini response format
+                parsed_result = self.parse_gemini_response(gemini_response)
+                ai_generated_summary = parsed_result['summary']
+                ai_generated_outcome = parsed_result['call_outcome']
 
-            logger.info(f"🤖 AI generated outcome: {ai_generated_outcome}")
-            logger.info(f"🤖 AI generated summary: {ai_generated_summary[:100]}...")
+                logger.info(f"🤖 AI generated outcome: {ai_generated_outcome}")
+                logger.info(f"🤖 AI generated summary: {ai_generated_summary[:100]}...")
+
+                # Cache the AI summary
+                self.cache_summary(call_id, ai_generated_summary, ai_generated_outcome)
 
             # Determine final outcome - use pre-determined if available, otherwise use AI
             if call_data.get('call_result'):
@@ -106,12 +154,14 @@ class CallAnalyzer:
                 "transcript_count": len(call_data['transcript'].split('\n')),
                 "outcome_details": outcome_details,  # Queue manager details
                 "start_time": call_data['start_time'],
-                "end_time": call_data['end_time']
+                "end_time": call_data['end_time'],
+                "from_cache": cached_summary is not None  # Indicate if summary was from cache
             }
 
             logger.info(f"📊 Analysis result prepared: {result['call_outcome']}")
             logger.info(f"📊 Summary field content: {result['summary'][:100]}...")
             logger.info(f"📊 Outcome details field content: {result['outcome_details']}")
+            logger.info(f"📊 Summary source: {'Cache' if cached_summary else 'Fresh AI Generation'}")
 
             # Save to Google Sheets
             if self.sheets_service:
@@ -325,3 +375,23 @@ class CallAnalyzer:
             import traceback
             logger.error(f"❌ Full traceback: {traceback.format_exc()}")
             return False
+
+
+# Utility functions for cache management
+def get_global_cache_stats():
+    """Get statistics about the global AI summaries cache"""
+    return {
+        'total_cached_summaries': len(AI_SUMMARIES_CACHE),
+        'call_ids': list(AI_SUMMARIES_CACHE.keys()),
+        'cache_size_mb': len(str(AI_SUMMARIES_CACHE)) / (1024 * 1024)
+    }
+
+def clear_global_cache():
+    """Clear the global AI summaries cache"""
+    global AI_SUMMARIES_CACHE
+    AI_SUMMARIES_CACHE.clear()
+    logger.info("🗑️ Global AI summaries cache cleared")
+
+def get_cached_summary_by_call_id(call_id: str) -> Optional[Dict]:
+    """Get cached summary by call_id"""
+    return AI_SUMMARIES_CACHE.get(call_id)
