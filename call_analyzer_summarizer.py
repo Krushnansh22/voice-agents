@@ -59,48 +59,61 @@ class CallAnalyzer:
             duration = (call_data['end_time'] - call_data['start_time']).total_seconds()
             duration_str = str(timedelta(seconds=int(duration)))
 
-            # Use pre-determined outcome from queue manager if available
+            # ALWAYS generate AI summary regardless of pre-determined outcome
+            logger.info("🤖 Generating AI summary with Gemini...")
+            gemini_response = await self.generate_ai_summary(
+                call_data['transcript'],
+                call_data['patient_name']
+            )
+
+            logger.info(f"🤖 Raw Gemini response: {gemini_response}")
+
+            # Parse the Gemini response format
+            parsed_result = self.parse_gemini_response(gemini_response)
+            ai_generated_summary = parsed_result['summary']
+            ai_generated_outcome = parsed_result['call_outcome']
+
+            logger.info(f"🤖 AI generated outcome: {ai_generated_outcome}")
+            logger.info(f"🤖 AI generated summary: {ai_generated_summary[:100]}...")
+
+            # Determine final outcome - use pre-determined if available, otherwise use AI
             if call_data.get('call_result'):
-                call_outcome = self._map_queue_outcome(call_data['call_result'])
-                ai_summary = call_data.get('result_details', 'No details provided')
-                logger.info(f"📋 Using pre-determined outcome from queue: {call_outcome}")
+                final_call_outcome = self._map_queue_outcome(call_data['call_result'])
+                logger.info(f"📋 Using pre-determined outcome from queue: {final_call_outcome}")
+                logger.info(f"📋 AI suggested outcome was: {ai_generated_outcome}")
             else:
-                # Generate AI summary and extract outcome using new format
-                logger.info("🤖 Generating AI summary with Gemini...")
-                gemini_response = await self.generate_ai_summary(
-                    call_data['transcript'],
-                    call_data['patient_name']
-                )
+                final_call_outcome = ai_generated_outcome
+                logger.info(f"📋 Using AI-determined outcome: {final_call_outcome}")
 
-                logger.info(f"🤖 Raw Gemini response: {gemini_response}")
+            # ALWAYS use the AI-generated summary (not the basic outcome details)
+            final_summary = ai_generated_summary
+            outcome_details = call_data.get('result_details', '')
 
-                # Parse the new Gemini response format
-                parsed_result = self.parse_gemini_response(gemini_response)
-                call_outcome = parsed_result['call_outcome']
-                ai_summary = parsed_result['summary']
-
-                logger.info(f"✅ Parsed outcome: {call_outcome}")
-                logger.info(f"✅ Parsed summary: {ai_summary[:100]}...")
+            logger.info(f"✅ Final outcome: {final_call_outcome}")
+            logger.info(f"✅ Final summary: {final_summary[:100]}...")
+            logger.info(f"✅ Outcome details: {outcome_details}")
 
             # Prepare result
             result = {
                 "call_id": call_data['call_id'],
                 "name": call_data['patient_name'],
                 "phone_number": call_data['patient_phone'],
-                "summary": ai_summary,
+                "summary": final_summary,  # Always use AI-generated summary
                 "duration": duration_str,
                 "date": call_data['start_time'].astimezone(pytz.timezone('Asia/Kolkata')).strftime(
                     "%Y-%m-%d %H:%M:%S %Z"),
-                "call_outcome": call_outcome,
+                "call_outcome": final_call_outcome,  # Use pre-determined or AI outcome
                 "transcript_count": len(call_data['transcript'].split('\n')),
-                "outcome_details": call_data.get('result_details', ''),
+                "outcome_details": outcome_details,  # Queue manager details
                 "start_time": call_data['start_time'],
                 "end_time": call_data['end_time']
             }
 
             logger.info(f"📊 Analysis result prepared: {result['call_outcome']}")
+            logger.info(f"📊 Summary field content: {result['summary'][:100]}...")
+            logger.info(f"📊 Outcome details field content: {result['outcome_details']}")
 
-            # Save to Google Sheets instead of Excel
+            # Save to Google Sheets
             if self.sheets_service:
                 logger.info("💾 Attempting to save to Google Sheets...")
                 success = await self.save_to_google_sheets(result)
@@ -251,7 +264,8 @@ class CallAnalyzer:
 
     IMPORTANT: For the Summary field, ALWAYS provide a conversational summary of what happened during the call, NOT structured data or appointment details.
 
-    For the Summary, include:
+    Guidelines for Summary:
+    For the Summary, include-
     - How the call started and who initiated it
     - What the patient's main concerns or questions were
     - Key points discussed during the conversation
@@ -261,9 +275,6 @@ class CallAnalyzer:
 
     Example of GOOD Summary for appointment booking:
     "Patient called regarding fertility consultation. Discussed their concerns about conceiving after 2 years of trying. Explained the IVF process and available treatments. Patient showed interest and agreed to book an appointment for initial consultation. Call ended positively with patient expressing gratitude for the information provided."
-
-    Example of BAD Summary (DO NOT DO THIS):
-    "Date: 2025-07-12 10:00 AM, Time: 10:00 AM"
 
     CALL TRANSCRIPT:
     {transcript}

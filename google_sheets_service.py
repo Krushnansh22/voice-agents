@@ -702,7 +702,15 @@ class GoogleSheetsService:
             # Get standardized timestamp for analysis
             standard_timestamp = get_current_timestamp_standard()
 
+            # DEBUG: Log what we're about to save
+            logger.info(f"📊 Analysis data summary field: {analysis_data.get('summary', 'NOT FOUND')[:100]}...")
+            logger.info(f"📊 Analysis data outcome_details field: {analysis_data.get('outcome_details', 'NOT FOUND')}")
+
             # Prepare row data with standardized date-time formats
+            # Make sure we're using the correct field for AI summary
+            ai_summary = analysis_data.get('summary', '')  # This should be the AI-generated summary
+            outcome_details = analysis_data.get('outcome_details', '')  # This should be additional details
+            
             row_data = [
                 analysis_data.get('call_id', ''),                        # Call ID
                 analysis_data.get('name', ''),                           # Patient Name
@@ -710,11 +718,15 @@ class GoogleSheetsService:
                 call_date,                                               # Call Date (YYYY-MM-DD)
                 analysis_data.get('duration', ''),                       # Call Duration
                 analysis_data.get('call_outcome', ''),                   # Call Outcome
-                analysis_data.get('summary', ''),                        # AI Summary
+                ai_summary,                                              # AI Summary (this should be the Gemini-generated summary)
                 analysis_data.get('transcript_count', 0),                # Transcript Count
-                analysis_data.get('outcome_details', ''),                # Outcome Details
+                outcome_details,                                         # Outcome Details (additional details from queue manager)
                 standard_timestamp                                       # Analysis Timestamp (YYYY-MM-DD HH:MM AM/PM)
             ]
+
+            # DEBUG: Log what we're actually saving
+            logger.info(f"💾 Saving AI Summary: {ai_summary[:100]}...")
+            logger.info(f"💾 Saving Outcome Details: {outcome_details}")
 
             await asyncio.get_event_loop().run_in_executor(
                 self.executor, lambda: worksheet.append_row(row_data)
@@ -723,10 +735,13 @@ class GoogleSheetsService:
             logger.info(f"✅ Call analysis saved with standardized date-time format")
             logger.info(f"   Call Date: {call_date}")
             logger.info(f"   Analysis Timestamp: {standard_timestamp}")
+            logger.info(f"   AI Summary length: {len(ai_summary)}")
             return True
 
         except Exception as e:
             logger.error(f"❌ Failed to save call analysis: {e}")
+            import traceback
+            logger.error(f"❌ Full traceback: {traceback.format_exc()}")
             return False
 
     async def get_call_analysis_data(self) -> List[Dict]:
